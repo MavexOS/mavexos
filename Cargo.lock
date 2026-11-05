@@ -10,5 +10,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mavex-shell"
+version = "0.0.1"
+dependencies = [
+ "mavex-vfs",
+]
+
+[[package]]
 name = "mavex-vfs"
 version = "0.0.1"

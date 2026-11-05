@@ -123,11 +123,8 @@ impl Vfs {
                     let mut base = if target.starts_with('/') {
                         target.clone()
                     } else {
-                        let mut p = String::new();
-                        for ino in stack.iter().skip(1) {
-                            p.push('/');
-                            p.push_str(&self.name_of(*ino));
-                        }
+                        let cur_ino = *stack.last().unwrap();
+                        let p = if cur_ino == ROOT { String::new() } else { format!("/{}", self.name_of(cur_ino)) };
                         format!("{}/{}", p, target)
                     };
                     for r in rest {
