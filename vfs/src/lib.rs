@@ -13,6 +13,21 @@ pub enum Errno {
     Loop,
 }
 
+pub fn normalize(cwd: &str, p: &str) -> String {
+    let full = if p.starts_with('/') { p.to_string() } else { format!("{}/{}", cwd, p) };
+    let mut parts: Vec<&str> = Vec::new();
+    for c in full.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
 pub type Result<T> = std::result::Result<T, Errno>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +45,7 @@ pub struct Stat {
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
+    pub mtime: u64,
 }
 
 enum Data {
@@ -43,12 +59,14 @@ struct Node {
     mode: u32,
     uid: u32,
     gid: u32,
+    mtime: u64,
 }
 
 pub struct Vfs {
     nodes: Vec<Option<Node>>,
     free: Vec<Ino>,
     cred: (u32, u32),
+    now: u64,
 }
 
 const ROOT: Ino = 0;
@@ -62,8 +80,8 @@ impl Default for Vfs {
 
 impl Vfs {
     pub fn new() -> Self {
-        let root = Node { data: Data::Dir(BTreeMap::new()), mode: 0o755, uid: 0, gid: 0 };
-        Vfs { nodes: vec![Some(root)], free: Vec::new(), cred: (0, 0) }
+        let root = Node { data: Data::Dir(BTreeMap::new()), mode: 0o755, uid: 0, gid: 0, mtime: 0 };
+        Vfs { nodes: vec![Some(root)], free: Vec::new(), cred: (0, 0), now: 0 }
     }
 
     fn alloc(&mut self, node: Node) -> Ino {
@@ -186,6 +204,96 @@ impl Vfs {
         Ok(ino)
     }
 
+
+    pub fn set_time(&mut self, ns: u64) {
+        self.now = ns;
+    }
+
+    pub fn live(&self, ino: Ino) -> bool {
+        self.nodes.get(ino as usize).is_some_and(|n| n.is_some())
+    }
+
+    pub fn open_file(&mut self, path: &str, create: bool, excl: bool, trunc: bool) -> Result<Ino> {
+        match self.walk(path, true, 0) {
+            Ok(ino) => {
+                if create && excl {
+                    return Err(Errno::Exist);
+                }
+                let now = self.now;
+                let n = self.node_mut(ino);
+                match &mut n.data {
+                    Data::File(f) => {
+                        if trunc {
+                            f.clear();
+                            n.mtime = now;
+                        }
+                        Ok(ino)
+                    }
+                    _ => Err(Errno::IsDir),
+                }
+            }
+            Err(Errno::NoEnt) if create => {
+                let (p, name) = self.parent_and_name(path)?;
+                self.insert(p, name, Node { data: Data::File(Vec::new()), mode: 0o644, uid: self.cred.0, gid: self.cred.1, mtime: self.now })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn read_at(&self, ino: Ino, off: u64, len: usize) -> Result<Vec<u8>> {
+        if !self.live(ino) {
+            return Err(Errno::NoEnt);
+        }
+        match &self.node(ino).data {
+            Data::File(f) => {
+                let start = (off as usize).min(f.len());
+                let end = start.saturating_add(len).min(f.len());
+                Ok(f[start..end].to_vec())
+            }
+            _ => Err(Errno::IsDir),
+        }
+    }
+
+    pub fn write_at(&mut self, ino: Ino, off: u64, data: &[u8]) -> Result<usize> {
+        if !self.live(ino) {
+            return Err(Errno::NoEnt);
+        }
+        let now = self.now;
+        let n = self.node_mut(ino);
+        match &mut n.data {
+            Data::File(f) => {
+                let off = off as usize;
+                if f.len() < off {
+                    f.resize(off, 0);
+                }
+                let end = off + data.len();
+                if f.len() < end {
+                    f.resize(end, 0);
+                }
+                f[off..end].copy_from_slice(data);
+                n.mtime = now;
+                Ok(data.len())
+            }
+            _ => Err(Errno::IsDir),
+        }
+    }
+
+    pub fn truncate(&mut self, ino: Ino, len: u64) -> Result<()> {
+        if !self.live(ino) {
+            return Err(Errno::NoEnt);
+        }
+        let now = self.now;
+        let n = self.node_mut(ino);
+        match &mut n.data {
+            Data::File(f) => {
+                f.resize(len as usize, 0);
+                n.mtime = now;
+                Ok(())
+            }
+            _ => Err(Errno::IsDir),
+        }
+    }
+
     pub fn set_creds(&mut self, uid: u32, gid: u32) {
         self.cred = (uid, gid);
     }
@@ -206,13 +314,13 @@ impl Vfs {
 
     pub fn mkdir(&mut self, path: &str, mode: u32) -> Result<()> {
         let (p, name) = self.parent_and_name(path)?;
-        self.insert(p, name, Node { data: Data::Dir(BTreeMap::new()), mode, uid: self.cred.0, gid: self.cred.1 })?;
+        self.insert(p, name, Node { data: Data::Dir(BTreeMap::new()), mode, uid: self.cred.0, gid: self.cred.1, mtime: self.now })?;
         Ok(())
     }
 
     pub fn symlink(&mut self, target: &str, path: &str) -> Result<()> {
         let (p, name) = self.parent_and_name(path)?;
-        self.insert(p, name, Node { data: Data::Symlink(target.to_string()), mode: 0o777, uid: self.cred.0, gid: self.cred.1 })?;
+        self.insert(p, name, Node { data: Data::Symlink(target.to_string()), mode: 0o777, uid: self.cred.0, gid: self.cred.1, mtime: self.now })?;
         Ok(())
     }
 
@@ -226,17 +334,19 @@ impl Vfs {
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<()> {
         match self.walk(path, true, 0) {
-            Ok(ino) => match &mut self.node_mut(ino).data {
+            Ok(ino) => match &mut self.nodes[ino as usize].as_mut().expect("dangling inode").data {
                 Data::File(f) => {
                     f.clear();
                     f.extend_from_slice(data);
+                    let now = self.now;
+                    self.node_mut(ino).mtime = now;
                     Ok(())
                 }
                 _ => Err(Errno::IsDir),
             },
             Err(Errno::NoEnt) => {
                 let (p, name) = self.parent_and_name(path)?;
-                self.insert(p, name, Node { data: Data::File(data.to_vec()), mode: 0o644, uid: self.cred.0, gid: self.cred.1 })?;
+                self.insert(p, name, Node { data: Data::File(data.to_vec()), mode: 0o644, uid: self.cred.0, gid: self.cred.1, mtime: self.now })?;
                 Ok(())
             }
             Err(e) => Err(e),
@@ -269,14 +379,14 @@ impl Vfs {
         Ok(self.stat_ino(ino))
     }
 
-    fn stat_ino(&self, ino: Ino) -> Stat {
+    pub fn stat_ino(&self, ino: Ino) -> Stat {
         let n = self.node(ino);
         let (kind, size) = match &n.data {
             Data::File(f) => (Kind::File, f.len() as u64),
             Data::Dir(m) => (Kind::Dir, m.len() as u64),
             Data::Symlink(t) => (Kind::Symlink, t.len() as u64),
         };
-        Stat { ino, kind, size, mode: n.mode, uid: n.uid, gid: n.gid }
+        Stat { ino, kind, size, mode: n.mode, uid: n.uid, gid: n.gid, mtime: n.mtime }
     }
 
     pub fn unlink(&mut self, path: &str) -> Result<()> {

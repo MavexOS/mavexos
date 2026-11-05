@@ -58,20 +58,7 @@ fn errstr(e: Errno) -> &'static str {
     }
 }
 
-pub fn normalize(cwd: &str, p: &str) -> String {
-    let full = if p.starts_with('/') { p.to_string() } else { format!("{}/{}", cwd, p) };
-    let mut parts: Vec<&str> = Vec::new();
-    for c in full.split('/') {
-        match c {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            c => parts.push(c),
-        }
-    }
-    format!("/{}", parts.join("/"))
-}
+pub use mavex_vfs::normalize;
 
 fn basename(p: &str) -> &str {
     p.trim_end_matches('/').rsplit('/').next().unwrap_or(p)
