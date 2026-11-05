@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "mavex-kernel"
 version = "0.0.1"
+dependencies = [
+ "mavex-vfs",
+]
 
 [[package]]
 name = "mavex-vfs"

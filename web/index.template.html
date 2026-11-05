@@ -24,7 +24,23 @@ const imports = { host: {
 WebAssembly.instantiate(bytes, imports).then(({instance}) => {
   mem = instance.exports.memory;
   instance.exports.kmain();
+  window.mavex = makeSyscalls(instance.exports);
+  window.dispatchEvent(new Event("mavex-ready"));
 });
+
+function makeSyscalls(k) {
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const put = (bytes) => { const p = k.k_alloc(bytes.length); new Uint8Array(mem.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
+  const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { k.k_free(p, n); } };
+  const staged = (n) => dec.decode(new Uint8Array(mem.buffer, k.k_result_ptr(), n));
+  return {
+    mkdir: (path) => withStr(path, (p, n) => k.k_mkdir(p, n)),
+    unlink: (path) => withStr(path, (p, n) => k.k_unlink(p, n)),
+    writeFile: (path, text) => withStr(path, (p, n) => { const [d, dn] = put(enc.encode(text)); try { return k.k_write_file(p, n, d, dn); } finally { k.k_free(d, dn); } }),
+    readFile: (path) => withStr(path, (p, n) => { const r = k.k_read_file(p, n); return r < 0 ? r : staged(r); }),
+    readdir: (path) => withStr(path, (p, n) => { const r = k.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
+  };
+}
 </script>
 </body>
 </html>
