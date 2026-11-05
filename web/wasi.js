@@ -220,6 +220,24 @@
     return m ? K.modules[m[1]] || null : null;
   }
 
+  class ParkSignal {}
+  function makeMavex(pid, getMem) {
+    const m8 = () => new Uint8Array(getMem().buffer), dv = () => new DataView(getMem().buffer);
+    const str = (p, n) => dec.decode(m8().subarray(p, p + n));
+    return {
+      pipe(out) { const r = K.x.k_pipe(pid); if (r < 0) return r; dv().setUint32(out, r & 0xffff, true); dv().setUint32(out + 4, r >>> 16, true); return 0; },
+      spawn(pp, pn, ap, an, ep, en, cp, cn, s0, s1, s2) {
+        const [[a, al], [b, bl], [c, cl], [d, dl]] = packed(str(pp, pn), m8().slice(ap, ap + an), m8().slice(ep, ep + en), str(cp, cn));
+        return K.x.k_spawn(pid, a, al, b, bl, c, cl, d, dl, s0, s1, s2);
+      },
+      ready: (c) => K.x.k_proc_ready(c),
+      run: (c) => { runProcess(c); return 0; },
+      wait: (c) => K.x.k_wait(c),
+      dup: (fd) => K.x.k_fd_dup(pid, fd),
+      park() { throw new ParkSignal(); },
+    };
+  }
+
   function runProcess(pid) {
     const x = K.x, err = (s) => { const [[p, n]] = packed(s); x.k_fd_write(pid, 2, p, n); };
     let code = 0;
@@ -228,7 +246,7 @@
       if (!mod) { err("mavexos: cannot execute: not a program\n"); x.k_proc_exit(pid, 126); return; }
       let memory = null;
       const wasi = makeWasi(pid, () => memory);
-      const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: wasi });
+      const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: wasi, mavex: makeMavex(pid, () => memory) });
       memory = inst.exports.memory;
       inst.exports._start();
     } catch (e) {
@@ -237,6 +255,32 @@
     }
     x.k_proc_exit(pid, code);
   }
+
+  /* ---- persistent brush login shell ---- */
+  const B = { pid: 0, inst: null };
+  function startBrush(cwd, env) {
+    const x = K.x, mod = K.modules.brush;
+    const [[a, al], [b, bl], [c, cl], [d, dl], [e, el]] = packed("/bin/brush", "brush\0", env.join("\0") + "\0", cwd, "");
+    const pid = x.k_spawn(0, a, al, b, bl, c, cl, d, dl, -1, -1, -1);
+    if (pid < 0) throw new Error("brush spawn failed " + pid);
+    let memory = null;
+    const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: makeWasi(pid, () => memory), mavex: makeMavex(pid, () => memory) });
+    memory = inst.exports.memory;
+    try { inst.exports._start(); } catch (e) { if (!(e instanceof ParkSignal)) throw e; }
+    B.pid = pid; B.inst = inst;
+  }
+  const brushStr = (ptr) => dec.decode(new Uint8Array(B.inst.exports.memory.buffer, ptr, B.inst.exports.brush_out_len()));
+  function takeTty() { const n = K.x.k_tty_take(); return n ? stagedStr(n) : ""; }
+  function brushRun(line) {
+    const bs = enc.encode(line), ex = B.inst.exports, p = ex.brush_alloc(bs.length);
+    new Uint8Array(ex.memory.buffer).set(bs, p);
+    let code;
+    try { code = ex.brush_run(p, bs.length); } catch (e) { return { out: takeTty() + "brush: trapped: " + (e && e.message || e) + "\n", code: 134, exited: false }; }
+    const exited = code <= -1000;
+    return { out: takeTty(), code: exited ? -1000 - code : code, exited };
+  }
+  const brushPrompt = () => brushStr(B.inst.exports.brush_prompt());
+  const brushCwd = () => brushStr(B.inst.exports.brush_cwd());
 
   /* ---- public API ---- */
   async function boot(kernelB64, extraModules) {
@@ -274,5 +318,5 @@
     }
   }
 
-  window.MavexRuntime = { boot, registerModule, install, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, K, packed, staged, stagedStr, scratch };
 })();

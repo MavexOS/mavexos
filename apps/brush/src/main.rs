@@ -19,6 +19,9 @@ fn block<T>(f: impl std::future::Future<Output = T>) -> T {
 }
 
 fn main() {
+    if let Ok(pwd) = std::env::var("PWD") {
+        let _ = std::env::set_current_dir(pwd);
+    }
     let rt = tokio::runtime::Builder::new_current_thread().build().expect("rt");
     RT.with(|r| *r.borrow_mut() = Some(rt));
     let shell = block(async {
@@ -37,6 +40,33 @@ fn main() {
             eprintln!("brush: init failed: {e}");
             std::process::exit(1);
         }
+    }
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        let (script, _rest) = if args[1] == "-c" {
+            (args.get(2).cloned().unwrap_or_default(), &args[args.len().min(3)..])
+        } else {
+            match std::fs::read_to_string(&args[1]) {
+                Ok(t) => (t, &args[2..]),
+                Err(e) => {
+                    eprintln!("brush: {}: {e}", args[1]);
+                    std::process::exit(127);
+                }
+            }
+        };
+        let code = SH.with(|c| {
+            let mut g = c.borrow_mut();
+            let sh = g.as_mut().unwrap();
+            let params = sh.default_exec_params();
+            match block(sh.run_string(script, &brush_core::SourceInfo::from("<cmd>"), &params)) {
+                Ok(r) => u8::from(r.exit_code) as i32,
+                Err(e) => {
+                    eprintln!("brush: {e}");
+                    1
+                }
+            }
+        });
+        std::process::exit(code);
     }
     unsafe { park() };
 }

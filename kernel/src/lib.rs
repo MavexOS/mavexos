@@ -212,6 +212,22 @@ pub extern "C" fn k_pipe(pid: u32) -> i32 {
 
 // ---- fd and path operations (WASI-shaped) ----
 #[no_mangle]
+pub extern "C" fn k_tty_take() -> i32 {
+    let out = with_sys(|s| std::mem::take(&mut s.tty_out));
+    if out.is_empty() { 0 } else { stage(out) }
+}
+
+#[no_mangle]
+pub extern "C" fn k_fd_dup(pid: u32, fd: u32) -> i32 {
+    with_sys(|s| wr(s.fd_dup(pid, fd), |n| n as i32))
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_ready(pid: u32) -> i32 {
+    with_sys(|s| s.proc_ready(pid)) as i32
+}
+
+#[no_mangle]
 pub extern "C" fn k_fd_close(pid: u32, fd: u32) -> i32 {
     with_sys(|s| wr(s.fd_close(pid, fd), |_| 0))
 }

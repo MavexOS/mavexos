@@ -132,6 +132,19 @@ impl Sys {
         Ok(self.proc(pid)?.env.clone())
     }
 
+    pub fn fd_dup(&mut self, pid: u32, fd: u32) -> R<u32> {
+        let f = self.procs.get(&pid).ok_or(errno::CHILD)?.fds.get(&fd).ok_or(errno::BADF)?.clone();
+        self.open_fd(pid, Fd { preopen: None, ..f })
+    }
+
+    /// A process may run once its stdin pipe (if any) has no live writers.
+    pub fn proc_ready(&self, pid: u32) -> bool {
+        match self.procs.get(&pid).and_then(|p| p.fds.get(&0)).map(|f| &f.kind) {
+            Some(FdKind::PipeR(i)) => self.pipes.get(*i).and_then(|p| p.as_ref()).is_none_or(|p| p.writers == 0),
+            _ => true,
+        }
+    }
+
     pub fn proc_cwd(&self, pid: u32) -> Option<String> {
         self.procs.get(&pid).map(|p| p.cwd.clone())
     }
