@@ -34,7 +34,9 @@ pub(crate) fn get_effective_gid() -> Result<u32, error::Error> {
 }
 
 pub(crate) fn get_current_username() -> Result<String, error::Error> {
-    Err(error::ErrorKind::NotSupportedOnThisPlatform("getting current username").into())
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .map_err(|_| error::ErrorKind::NotSupportedOnThisPlatform("getting current username").into())
 }
 
 pub(crate) fn get_user_group_ids() -> Result<Vec<u32>, error::Error> {

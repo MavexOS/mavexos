@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")/.."
 cargo build --release --target wasm32-unknown-unknown -p mavex-kernel
-(cd apps && cargo build --release --target wasm32-wasip1 -p mavex-coreutils)
+(cd apps && cargo build --release --target wasm32-wasip1 -p mavex-coreutils -p mavex-brush)
 mkdir -p dist
 cp web/index.html web/styles.css web/scripts.js web/wasi.js dist/
 python3 - <<'PY'
@@ -14,5 +14,6 @@ def blob(path, var, extra=""):
 utils = re.search(r"const UTILS: &\[&str\] = &\[(.*?)\];", open("apps/coreutils/src/main.rs").read()).group(1)
 open("dist/kernel.wasm.js", "w").write(blob("target/wasm32-unknown-unknown/release/mavex_kernel.wasm", "MAVEX_KERNEL_B64"))
 open("dist/coreutils.wasm.js", "w").write(blob("apps/target/wasm32-wasip1/release/coreutils.wasm", "MAVEX_COREUTILS_B64", f"window.MAVEX_COREUTILS_UTILS = [{utils}];\n"))
+open("dist/brush.wasm.js", "w").write(blob("apps/target/wasm32-wasip1/release/brush.wasm", "MAVEX_BRUSH_B64"))
 PY
 ls -la dist/*.js dist/index.html dist/styles.css

@@ -279,7 +279,7 @@
     const exited = code <= -1000;
     return { out: takeTty(), code: exited ? -1000 - code : code, exited };
   }
-  const brushPrompt = () => brushStr(B.inst.exports.brush_prompt());
+  const brushPrompt = () => brushStr(B.inst.exports.brush_prompt()).replace(/[\x01\x02]/g, "");
   const brushCwd = () => brushStr(B.inst.exports.brush_cwd());
 
   /* ---- public API ---- */

@@ -38,17 +38,25 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(K.memory.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
 const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { K.k_free(p, n); } };
 const staged = (n) => dec.decode(new Uint8Array(K.memory.buffer, K.k_result_ptr(), n));
+const useBrush = !location.hash.includes("msh");
+let brushExited = false;
+const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "TERM=xterm-256color", "PWD=/home/user",
+  "PS1=\\[\\e[1;32m\\]\\u@mavex\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ "];
+function startLogin() { R.startBrush("/home/user", LOGIN_ENV); }
 const sys = {
   mkdir: (path) => withStr(path, (p, n) => K.k_mkdir(p, n)),
   unlink: (path) => withStr(path, (p, n) => K.k_unlink(p, n)),
   writeFile: (path, text) => withStr(path, (p, n) => { const [d, dn] = put(enc.encode(text)); try { return K.k_write_file(p, n, d, dn); } finally { K.k_free(d, dn); } }),
   readFile: (path) => withStr(path, (p, n) => { const r = K.k_read_file(p, n); return r < 0 ? r : staged(r); }),
   readdir: (path) => withStr(path, (p, n) => { const r = K.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
-  shellRun: (line) => withStr(line, (p, n) => staged(K.k_shell_run(p, n))),
-  prompt: () => staged(K.k_shell_prompt()),
+  shellRun: (line) => {
+    if (!useBrush) return withStr(line, (p, n) => staged(K.k_shell_run(p, n)));
+    const r = R.brushRun(line); brushExited = r.exited; return r.out;
+  },
+  prompt: () => (useBrush ? R.brushPrompt() : staged(K.k_shell_prompt())),
   complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
-  exited: () => K.k_shell_exited() === 1,
-  reset: () => K.k_shell_reset(),
+  exited: () => (useBrush ? brushExited : K.k_shell_exited() === 1),
+  reset: () => { if (useBrush) { brushExited = false; startLogin(); } else K.k_shell_reset(); },
 };
 
 /* ---------- line editor ---------- */
@@ -169,11 +177,14 @@ async function boot() {
   const rt = await R.boot(window.MAVEX_KERNEL_B64);
   K = rt.x;
   const coreutils = R.registerModule("coreutils", window.MAVEX_COREUTILS_B64);
+  const brushMod = R.registerModule("brush", window.MAVEX_BRUSH_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
   if (!FAST) await sleep(350);
-  await coreutils;
+  await coreutils; await brushMod;
   K.kmain();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
+  R.install("brush", ["sh", "bash"]);
+  if (useBrush) startLogin();
   fitCols();
   window.mavex = sys;
   for (const l of R.K.consoleBuf.split("\n").filter(Boolean)) {
