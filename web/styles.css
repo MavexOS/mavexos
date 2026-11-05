@@ -1,0 +1,13 @@
+html,body{margin:0;height:100%;background:#0b0e14;color:#c8d3e0}
+#screen{box-sizing:border-box;height:100%;padding:12px;overflow:auto;cursor:text;
+        font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}
+pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
+#cur{background:#c8d3e0;color:#0b0e14;animation:blink 1s steps(1) infinite}
+#cur.idle{animation:none}
+@keyframes blink{50%{background:transparent;color:inherit}}
+#sink{position:fixed;left:-1000px;top:0;width:1px;height:1px;opacity:0}
+.b{font-weight:bold}
+.c30{color:#4c566a}.c31{color:#e06c75}.c32{color:#98c379}.c33{color:#e5c07b}
+.c34{color:#61afef}.c35{color:#c678dd}.c36{color:#56b6c2}.c37{color:#c8d3e0}
+.c90{color:#6b7689}.c91{color:#ff7b86}.c92{color:#b5e890}.c93{color:#f0d08c}
+.c94{color:#7cc0ff}.c95{color:#d68fee}.c96{color:#6fd0dc}.c97{color:#fff}

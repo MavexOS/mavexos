@@ -377,7 +377,8 @@ impl Host for KHost {
 
     fn exec(&self, req: &ExecReq) -> Option<ExecRes> {
         let path = req.env.get("PATH").cloned().unwrap_or_default();
-        let env: Vec<String> = req.env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let mut env: Vec<String> = req.env.iter().filter(|(k, _)| k.as_str() != "PWD").map(|(k, v)| format!("{}={}", k, v)).collect();
+        env.push(format!("PWD={}", req.cwd));
         let (pid, out_pipe) = with_sys(|s| {
             let exe = s.which(&req.argv[0], &path, req.cwd)?;
             s.tty_out.clear();

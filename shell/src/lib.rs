@@ -7,7 +7,7 @@ pub const COMMANDS: &[&str] = &[
     "tail", "touch", "tree", "true", "type", "uname", "unset", "wc", "which", "whoami",
 ];
 
-pub const SHELL_ONLY: &[&str] = &["cd", "export", "unset", "exit", "help", "clear", "which", "type"];
+pub const SHELL_ONLY: &[&str] = &["cd", "pwd", "export", "unset", "exit", "help", "clear", "which", "type"];
 
 pub struct ExecReq<'a> {
     pub argv: &'a [String],

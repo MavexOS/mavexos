@@ -1,33 +1,3 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MavexOS</title>
-<style>
-  html,body{margin:0;height:100%;background:#0b0e14;color:#c8d3e0}
-  #screen{box-sizing:border-box;height:100%;padding:12px;overflow:auto;cursor:text;
-          font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}
-  pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
-  #cur{background:#c8d3e0;color:#0b0e14;animation:blink 1s steps(1) infinite}
-  #cur.idle{animation:none}
-  @keyframes blink{50%{background:transparent;color:inherit}}
-  #sink{position:fixed;left:-1000px;top:0;width:1px;height:1px;opacity:0}
-  .b{font-weight:bold}
-  .c30{color:#4c566a}.c31{color:#e06c75}.c32{color:#98c379}.c33{color:#e5c07b}
-  .c34{color:#61afef}.c35{color:#c678dd}.c36{color:#56b6c2}.c37{color:#c8d3e0}
-  .c90{color:#6b7689}.c91{color:#ff7b86}.c92{color:#b5e890}.c93{color:#f0d08c}
-  .c94{color:#7cc0ff}.c95{color:#d68fee}.c96{color:#6fd0dc}.c97{color:#fff}
-</style>
-</head>
-<body>
-<div id="screen">
-  <pre id="out"></pre>
-  <pre id="line"><span id="prompt"></span><span id="before"></span><span id="cur"> </span><span id="after"></span></pre>
-</div>
-<textarea id="sink" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
-<script>
-const KERNEL_WASM_B64 = "__KERNEL_WASM_BASE64__";
 const $ = (id) => document.getElementById(id);
 const screenEl = $("screen"), out = $("out"), lineEl = $("line");
 const FAST = location.hash.includes("fast");
@@ -62,11 +32,12 @@ function write(text) { ansiToNodes(text); scrollDown(); }
 function scrollDown() { screenEl.scrollTop = screenEl.scrollHeight; }
 
 /* ---------- kernel ---------- */
-let mem, K, bootBuf = "";
+const R = window.MavexRuntime;
+let K, mem;
 const enc = new TextEncoder(), dec = new TextDecoder();
-const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(mem.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
+const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(K.memory.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
 const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { K.k_free(p, n); } };
-const staged = (n) => dec.decode(new Uint8Array(mem.buffer, K.k_result_ptr(), n));
+const staged = (n) => dec.decode(new Uint8Array(K.memory.buffer, K.k_result_ptr(), n));
 const sys = {
   mkdir: (path) => withStr(path, (p, n) => K.k_mkdir(p, n)),
   unlink: (path) => withStr(path, (p, n) => K.k_unlink(p, n)),
@@ -181,24 +152,37 @@ document.addEventListener("paste", (e) => {
 screenEl.addEventListener("click", () => { if (!window.getSelection().toString()) $("sink").focus(); });
 $("sink").addEventListener("input", (e) => { const v = e.target.value; e.target.value = ""; if (live && v) insert(v.replace(/\n/g, "")); });
 
+/* ---------- terminal size ---------- */
+function fitCols() {
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre";
+  probe.textContent = "x".repeat(100); out.appendChild(probe);
+  const cw = probe.getBoundingClientRect().width / 100; out.removeChild(probe);
+  const w = screenEl.clientWidth - 24;
+  if (cw > 0 && K) K.k_tty_resize(Math.max(20, Math.floor(w / cw)));
+}
+window.addEventListener("resize", fitCols);
+
 /* ---------- boot ---------- */
 async function boot() {
   showLine(false);
-  const bytes = Uint8Array.from(atob(KERNEL_WASM_B64), c => c.charCodeAt(0));
-  const imports = { host: { console_write(ptr, len) { bootBuf += dec.decode(new Uint8Array(mem.buffer, ptr, len)); } } };
-  const { instance } = await WebAssembly.instantiate(bytes, imports);
-  K = instance.exports; mem = K.memory;
+  const rt = await R.boot(window.MAVEX_KERNEL_B64);
+  K = rt.x;
+  const coreutils = R.registerModule("coreutils", window.MAVEX_COREUTILS_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
   if (!FAST) await sleep(350);
+  await coreutils;
   K.kmain();
+  R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
+  fitCols();
   window.mavex = sys;
-  for (const l of bootBuf.split("\n").filter(Boolean)) {
+  for (const l of R.K.consoleBuf.split("\n").filter(Boolean)) {
     const m = l.match(/^\[ ok \](.*)$/);
     write(m ? "[ \x1b[1;32m OK \x1b[0m ]" + m[1] + "\n" : l + "\n");
     if (!FAST) await sleep(120 + Math.random() * 180);
   }
   if (!FAST) await sleep(300);
-  const ver = (bootBuf.match(/MavexOS ([0-9.]+)/) || [0, "?"])[1];
+  const ver = (R.K.consoleBuf.match(/MavexOS ([0-9.]+)/) || [0, "?"])[1];
   write("\nMavexOS " + ver + " tty1\n\nmavex login: user (automatic login)\n");
   write(sys.readFile("/etc/motd") + "\n");
   newPrompt();
@@ -207,6 +191,3 @@ async function boot() {
   window.dispatchEvent(new Event("mavex-ready"));
 }
 boot().catch((e) => { write("\n\x1b[1;31mkernel panic: " + e + "\x1b[0m\n"); throw e; });
-</script>
-</body>
-</html>

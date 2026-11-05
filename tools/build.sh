@@ -1,13 +1,18 @@
 #!/bin/sh
+# Builds dist/: index.html, styles.css, scripts.js, wasi.js, kernel.wasm.js, coreutils.wasm.js
 set -e
 cd "$(dirname "$0")/.."
 cargo build --release --target wasm32-unknown-unknown -p mavex-kernel
+(cd apps && cargo build --release --target wasm32-wasip1 -p mavex-coreutils)
 mkdir -p dist
-WASM=target/wasm32-unknown-unknown/release/mavex_kernel.wasm
-python3 - "$WASM" <<'PY'
-import base64, sys
-b64 = base64.b64encode(open(sys.argv[1], "rb").read()).decode()
-tpl = open("web/index.template.html").read()
-open("dist/index.html", "w").write(tpl.replace("__KERNEL_WASM_BASE64__", b64))
+cp web/index.html web/styles.css web/scripts.js web/wasi.js dist/
+python3 - <<'PY'
+import base64, re
+def blob(path, var, extra=""):
+    b64 = base64.b64encode(open(path, "rb").read()).decode()
+    return f'window.{var} = "{b64}";\n{extra}'
+utils = re.search(r"const UTILS: &\[&str\] = &\[(.*?)\];", open("apps/coreutils/src/main.rs").read()).group(1)
+open("dist/kernel.wasm.js", "w").write(blob("target/wasm32-unknown-unknown/release/mavex_kernel.wasm", "MAVEX_KERNEL_B64"))
+open("dist/coreutils.wasm.js", "w").write(blob("apps/target/wasm32-wasip1/release/coreutils.wasm", "MAVEX_COREUTILS_B64", f"window.MAVEX_COREUTILS_UTILS = [{utils}];\n"))
 PY
-echo "built dist/index.html ($(wc -c < dist/index.html) bytes)"
+ls -la dist/*.js dist/index.html dist/styles.css

@@ -87,6 +87,21 @@ async function run(name, type) {
   t = await text(p);
   await expect("restart", /\nback\n/.test(t));
 
+  // real uutils coreutils (wasm32-wasip1) on the WASI bridge
+  await cmd(p, "cd /");
+  await cmd(p, "ls");
+  await cmd(p, "ls /etc | cat");
+  await cmd(p, "seq 1 100000 | wc -l");
+  await cmd(p, "yes | head -n 2");
+  await cmd(p, "cd ~/proj && echo hi | tee uu.txt | tr a-z A-Z && cat uu.txt && ls -l uu.txt");
+  await cmd(p, "ls /nonexistent; echo rc=$?");
+  t = await text(p);
+  await expect("uutils ls columns", /bin\s+etc\s+home\s+tmp\s+usr/.test(t) && !/bin\netc\nhome/.test(t));
+  await expect("uutils pipe", t.includes("hostname") && /\n100000\n/.test(t));
+  await expect("yes|head", /\ny\ny\n/.test(t));
+  await expect("tee/tr/cat", t.includes("HI") && /\nhi\n/.test(t) && /-rw\S+ \d+ \S+ \S+ 3 /.test(t));
+  await expect("uutils error code", t.includes("ls: cannot access '/nonexistent'") && t.includes("rc=2"));
+
   // JS API
   const api = await p.evaluate(() => ({
     r: window.mavex.readFile("/home/user/proj/src/f.txt"),

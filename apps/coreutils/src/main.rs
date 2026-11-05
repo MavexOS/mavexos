@@ -3,6 +3,9 @@ use std::ffi::OsString;
 const UTILS: &[&str] = &["basename", "cat", "cp", "cut", "date", "dirname", "echo", "env", "false", "head", "ln", "ls", "mkdir", "mv", "printf", "pwd", "readlink", "realpath", "rm", "rmdir", "seq", "sleep", "sort", "tail", "tee", "touch", "tr", "true", "uname", "uniq", "wc", "yes"];
 
 fn main() {
+    if let Ok(pwd) = std::env::var("PWD") {
+        let _ = std::env::set_current_dir(pwd);
+    }
     let mut args: Vec<OsString> = std::env::args_os().collect();
     let mut name = args
         .first()

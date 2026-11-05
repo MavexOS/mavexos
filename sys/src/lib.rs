@@ -26,6 +26,8 @@ pub mod ftype {
     pub const SYMLINK: u8 = 7;
 }
 
+const PIPE_CAP: usize = 4 << 20;
+
 pub type R<T> = Result<T, u16>;
 
 fn verr(e: VErr) -> u16 {
@@ -391,8 +393,14 @@ impl Sys {
             FdKind::Dir { .. } => Err(errno::ISDIR),
             FdKind::PipeW(id) => match self.pipes.get_mut(id).and_then(|p| p.as_mut()) {
                 Some(p) if p.readers > 0 => {
-                    p.buf.extend(data);
-                    Ok(data.len())
+                    // Run-to-completion has no blocking, so a full pipe acts like SIGPIPE: `yes | head` terminates.
+                    let room = PIPE_CAP.saturating_sub(p.buf.len());
+                    if room == 0 && !data.is_empty() {
+                        return Err(errno::PIPE);
+                    }
+                    let n = data.len().min(room);
+                    p.buf.extend(&data[..n]);
+                    Ok(n)
                 }
                 Some(_) => Err(errno::PIPE),
                 None => Err(errno::BADF),

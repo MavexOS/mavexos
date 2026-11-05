@@ -6,12 +6,12 @@ VER=$(sed -n 's/^version = "\(.*\)"/\1/p' kernel/Cargo.toml | head -1)
 NAME="mavexos-$VER"
 rm -rf "dist/$NAME" "dist/$NAME.zip"
 mkdir -p "dist/$NAME"
-cp dist/index.html "dist/$NAME/index.html"
+for f in index.html styles.css scripts.js wasi.js kernel.wasm.js coreutils.wasm.js; do cp "dist/$f" "dist/$NAME/$f"; done
 cat > "dist/$NAME/README.txt" <<TXT
 MavexOS $VER (pre-release)
 
 1. Extract this zip.
-2. Open index.html in Chrome/Chromium/Edge or Firefox (double-click is fine).
+2. Open index.html (keep the other files next to it) in Chrome/Chromium/Edge or Firefox (double-click is fine).
 3. Wait for the boot, then type commands at the prompt. Try: help
 
 Everything runs inside the tab, offline. Nothing is saved yet: reloading the page starts a fresh first boot.
@@ -20,7 +20,7 @@ python3 - "dist" "$NAME" <<'PY'
 import sys, zipfile, os
 d, n = sys.argv[1:3]
 with zipfile.ZipFile(f"{d}/{n}.zip", "w", zipfile.ZIP_DEFLATED) as z:
-    for f in ("index.html", "README.txt"):
+    for f in ("index.html", "styles.css", "scripts.js", "wasi.js", "kernel.wasm.js", "coreutils.wasm.js", "README.txt"):
         z.write(f"{d}/{n}/{f}", f"{n}/{f}")
 PY
 echo "packaged dist/$NAME.zip"
