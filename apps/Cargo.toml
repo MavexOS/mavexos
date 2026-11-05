@@ -1,5 +1,5 @@
 [workspace]
-members = ["coreutils", "probe", "brush"]
+members = ["coreutils", "probe", "brush", "mavexutils"]
 resolver = "2"
 
 [profile.release]

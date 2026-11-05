@@ -2,7 +2,8 @@ import { chromium, firefox } from "playwright";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-const url = pathToFileURL(resolve("../dist/index.html")).href + "#fast,msh";
+const base = pathToFileURL(resolve("../dist/index.html")).href;
+const url = base + "#fast,msh";
 let failed = false;
 
 const text = (p) => p.evaluate(() => document.getElementById("screen").innerText);
@@ -96,7 +97,7 @@ async function run(name, type) {
   await cmd(p, "cd ~/proj && echo hi | tee uu.txt | tr a-z A-Z && cat uu.txt && ls -l uu.txt");
   await cmd(p, "ls /nonexistent; echo rc=$?");
   t = await text(p);
-  await expect("uutils ls columns", /bin\s+etc\s+home\s+tmp\s+usr/.test(t) && !/bin\netc\nhome/.test(t));
+  await expect("uutils ls columns", /bin\s+etc\s+home\s+root\s+tmp\s+usr/.test(t) && !/bin\netc\nhome/.test(t));
   await expect("uutils pipe", t.includes("hostname") && /\n100000\n/.test(t));
   await expect("yes|head", /\ny\ny\n/.test(t));
   await expect("tee/tr/cat", t.includes("HI") && /\nhi\n/.test(t) && /-rw\S+ \d+ \S+ \S+ 3 /.test(t));
@@ -115,5 +116,24 @@ async function run(name, type) {
   await b.close();
 }
 
-for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) await run(name, type);
+async function runBrush(name, type) {
+  const b = await type.launch();
+  const p = await b.newPage();
+  const errs = [];
+  p.on("pageerror", (e) => errs.push(e.message));
+  await p.goto(base + "#fast");
+  await p.waitForFunction(() => window.mavexReady, null, { timeout: 8000 });
+  const fails = [];
+  for (const l of ["id", "cat /etc/shadow", "sudo id", "ip link add d0 type dummy", "sudo ip link add d0 type dummy", "sudo ip addr add 10.1.2.3/24 dev d0", "sudo ip link set d0 up", "ip -br addr", "ip route", "sudo -i", "id -u", "exit", "su", "echo a | tr a b"]) await cmd(p, l);
+  await new Promise((r) => setTimeout(r, 500));
+  const t = await text(p);
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["su", "su: Authentication failure"], ["pipe", "\nb\n"]];
+  for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
+  if (errs.length) fails.push("pageerror: " + errs.join("; "));
+  console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (brush)`, fails.length ? fails : "");
+  if (fails.length) { failed = true; console.log(t.slice(-1500)); }
+  await b.close();
+}
+
+for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) { await run(name, type); await runBrush(name, type); }
 process.exit(failed ? 1 : 0);

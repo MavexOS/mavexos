@@ -6,7 +6,7 @@ VER=$(sed -n 's/^version = "\(.*\)"/\1/p' kernel/Cargo.toml | head -1)
 NAME="mavexos-$VER"
 rm -rf "dist/$NAME" "dist/$NAME.zip"
 mkdir -p "dist/$NAME"
-for f in index.html styles.css scripts.js wasi.js kernel.wasm.js coreutils.wasm.js; do cp "dist/$f" "dist/$NAME/$f"; done
+for f in index.html styles.css scripts.js wasi.js kernel.wasm.js coreutils.wasm.js brush.wasm.js mavexutils.wasm.js; do cp "dist/$f" "dist/$NAME/$f"; done
 cat > "dist/$NAME/README.txt" <<TXT
 MavexOS $VER (pre-release)
 

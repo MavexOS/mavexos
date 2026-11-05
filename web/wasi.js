@@ -235,6 +235,23 @@
       wait: (c) => K.x.k_wait(c),
       dup: (fd) => K.x.k_fd_dup(pid, fd),
       park() { throw new ParkSignal(); },
+      getcreds(out) { const r = K.x.k_proc_creds(pid); if (r < 0) return r; m8().set(staged(r), out); return 0; },
+      setcreds: (u, g) => K.x.k_setcreds(pid, u, g),
+      chmod(pp, pn, mode) { const [[a, al]] = packed(str(pp, pn)); return K.x.k_chmod_as(pid, a, al, mode); },
+      chown(pp, pn, u, g) { const [[a, al]] = packed(str(pp, pn)); return K.x.k_chown_as(pid, a, al, u, g); },
+      statx(pp, pn, out) { const [[a, al]] = packed(str(pp, pn)); const r = K.x.k_statx(pid, a, al); if (r < 0) return r; m8().set(staged(r), out); return 0; },
+      net(rp, rn, out, cap) {
+        const [[a, al]] = packed(str(rp, rn));
+        const r = K.x.k_net(pid, a, al), data = staged(K.x.k_result_len());
+        const n = Math.min(data.length, cap - 1);
+        m8().set(data.subarray(0, n), out); m8()[out + n] = 0;
+        return r < 0 ? r : n;
+      },
+      push_shell(cp, cn, ep, en) {
+        const cwd = str(cp, cn), env = dec.decode(m8().subarray(ep, ep + en)).split("\0").filter(Boolean);
+        startBrush(cwd, env, pid);
+        return 0;
+      },
     };
   }
 
@@ -257,27 +274,33 @@
   }
 
   /* ---- persistent brush login shell ---- */
-  const B = { pid: 0, inst: null };
-  function startBrush(cwd, env) {
+  const B = { pid: 0, inst: null, stack: [] };
+  function startBrush(cwd, env, ppid) {
     const x = K.x, mod = K.modules.brush;
     const [[a, al], [b, bl], [c, cl], [d, dl], [e, el]] = packed("/bin/brush", "brush\0", env.join("\0") + "\0", cwd, "");
-    const pid = x.k_spawn(0, a, al, b, bl, c, cl, d, dl, -1, -1, -1);
+    const pid = x.k_spawn(ppid || 0, a, al, b, bl, c, cl, d, dl, -1, -1, -1);
     if (pid < 0) throw new Error("brush spawn failed " + pid);
     let memory = null;
     const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: makeWasi(pid, () => memory), mavex: makeMavex(pid, () => memory) });
     memory = inst.exports.memory;
     try { inst.exports._start(); } catch (e) { if (!(e instanceof ParkSignal)) throw e; }
+    if (B.inst) B.stack.push({ pid: B.pid, inst: B.inst });
     B.pid = pid; B.inst = inst;
   }
   const brushStr = (ptr) => dec.decode(new Uint8Array(B.inst.exports.memory.buffer, ptr, B.inst.exports.brush_out_len()));
   function takeTty() { const n = K.x.k_tty_take(); return n ? stagedStr(n) : ""; }
   function brushRun(line) {
-    const bs = enc.encode(line), ex = B.inst.exports, p = ex.brush_alloc(bs.length);
+    const cur = B.inst, bs = enc.encode(line), ex = B.inst.exports, p = ex.brush_alloc(bs.length);
     new Uint8Array(ex.memory.buffer).set(bs, p);
     let code;
     try { code = ex.brush_run(p, bs.length); } catch (e) { return { out: takeTty() + "brush: trapped: " + (e && e.message || e) + "\n", code: 134, exited: false }; }
-    const exited = code <= -1000;
-    return { out: takeTty(), code: exited ? -1000 - code : code, exited };
+    let exited = code <= -1000;
+    const out = takeTty();
+    if (exited && B.stack.length && B.inst === cur) {
+      K.x.k_proc_exit(B.pid, -1000 - code); K.x.k_wait(B.pid);
+      const prev = B.stack.pop(); B.pid = prev.pid; B.inst = prev.inst; exited = false;
+    }
+    return { out, code: exited ? -1000 - code : code, exited };
   }
   const brushPrompt = () => brushStr(B.inst.exports.brush_prompt()).replace(/[\x01\x02]/g, "");
   const brushCwd = () => brushStr(B.inst.exports.brush_cwd());
@@ -301,6 +324,22 @@
     K.modules[name] = await WebAssembly.compile(await blobBytes(b64));
   }
 
+  function installSetuid(name, bins) {
+    const x = K.x;
+    const marker = enc.encode("#!mavex-module " + name + "\n");
+    for (const b of bins) {
+      const file = "/bin/" + b;
+      const d = x.k_alloc(marker.length);
+      u8().set(marker, d);
+      const [[p, n]] = packed(file);
+      x.k_unlink(p, n);
+      x.k_write_file(p, n, d, marker.length);
+      x.k_free(d, marker.length);
+      x.k_chown(...packed(file)[0], 0, 0);
+      x.k_chmod(...packed(file)[0], 0o4755);
+    }
+  }
+
   function install(name, utils) {
     const x = K.x, file = "/bin/" + name;
     const marker = enc.encode("#!mavex-module " + name + "\n");
@@ -318,5 +357,5 @@
     }
   }
 
-  window.MavexRuntime = { startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
 })();

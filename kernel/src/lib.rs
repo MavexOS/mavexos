@@ -125,6 +125,12 @@ pub unsafe extern "C" fn k_chmod(p: *const u8, n: usize, mode: u32) -> i32 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn k_chown(p: *const u8, n: usize, uid: u32, gid: u32) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| ret(s.vfs.chown(path, uid, gid)))
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn k_unlink(p: *const u8, n: usize) -> i32 {
     let path = str_arg(p, n);
     with_sys(|s| ret(s.vfs.unlink(path)))
@@ -241,7 +247,8 @@ pub unsafe extern "C" fn k_chmod_as(pid: u32, p: *const u8, n: usize, mode: u32)
     let path = str_arg(p, n);
     with_sys(|s| {
         s.enter(pid);
-        ret(s.vfs.chmod(path, mode))
+        let abs = mavex_vfs::normalize(&s.proc_cwd(pid).unwrap_or_else(|| "/".into()), path);
+        ret(s.vfs.chmod(&abs, mode))
     })
 }
 
@@ -250,8 +257,53 @@ pub unsafe extern "C" fn k_chown_as(pid: u32, p: *const u8, n: usize, uid: u32, 
     let path = str_arg(p, n);
     with_sys(|s| {
         s.enter(pid);
-        ret(s.vfs.chown(path, uid, gid))
+        let abs = mavex_vfs::normalize(&s.proc_cwd(pid).unwrap_or_else(|| "/".into()), path);
+        ret(s.vfs.chown(&abs, uid, gid))
     })
+}
+
+/// Netlink-like request. Returns reply length (>= 0) staged, or a negative errno with the message staged.
+#[no_mangle]
+pub unsafe extern "C" fn k_net(pid: u32, p: *const u8, n: usize) -> i32 {
+    let req = str_arg(p, n);
+    with_sys(|s| match s.net_request(pid, req) {
+        Ok(t) => stage(t.into_bytes()),
+        Err((code, msg)) => {
+            stage(msg.into_bytes());
+            code
+        }
+    })
+}
+
+/// Stages [mode, uid, gid, kind(0 file,1 dir,2 symlink), size_lo, size_hi] as 6 LE u32 for an absolute path (lstat semantics).
+#[no_mangle]
+pub unsafe extern "C" fn k_statx(pid: u32, p: *const u8, n: usize) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| {
+        s.enter(pid);
+        let cwd = s.proc_cwd(pid).unwrap_or_else(|| "/".into());
+        let abs = mavex_vfs::normalize(&cwd, path);
+        match s.vfs.lstat(&abs) {
+            Ok(st) => {
+                let kind = match st.kind {
+                    mavex_vfs::Kind::File => 0u32,
+                    mavex_vfs::Kind::Dir => 1,
+                    _ => 2,
+                };
+                let mut b = Vec::new();
+                for v in [st.mode, st.uid, st.gid, kind, st.size as u32, (st.size >> 32) as u32] {
+                    b.extend_from_slice(&v.to_le_bytes());
+                }
+                stage(b)
+            }
+            Err(e) => errno_code(e),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn k_result_len() -> usize {
+    RESULT.with(|r| r.borrow().len())
 }
 
 #[no_mangle]

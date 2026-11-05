@@ -2,6 +2,8 @@
 use mavex_vfs::{normalize, Errno as VErr, Ino, Kind, Stat, Vfs};
 use std::collections::{BTreeMap, VecDeque};
 
+pub mod net;
+
 pub mod errno {
     pub const ACCES: u16 = 2;
     pub const PERM: u16 = 63;
@@ -106,6 +108,7 @@ pub struct Sys {
     pipes: Vec<Option<Pipe>>,
     next_pid: u32,
     default_cred: (u32, u32),
+    pub net: net::Net,
     pub tty_out: Vec<u8>,
     pub tty_in: VecDeque<u8>,
 }
@@ -118,7 +121,7 @@ pub struct DirEnt {
 
 impl Sys {
     pub fn new(vfs: Vfs) -> Self {
-        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), tty_out: Vec::new(), tty_in: VecDeque::new() }
+        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), tty_out: Vec::new(), tty_in: VecDeque::new() }
     }
 
     pub fn set_default_creds(&mut self, uid: u32, gid: u32) {
@@ -138,6 +141,11 @@ impl Sys {
     pub fn enter(&mut self, pid: u32) {
         let (u, g) = self.procs.get(&pid).map(|p| (p.euid, p.egid)).unwrap_or(self.default_cred);
         self.vfs.set_creds(u, g);
+    }
+
+    pub fn net_request(&mut self, pid: u32, req: &str) -> Result<String, (i32, String)> {
+        let root = self.procs.get(&pid).is_some_and(|p| p.euid == 0);
+        self.net.request(root, req)
     }
 
     pub fn proc_creds(&self, pid: u32) -> R<(u32, u32, u32, u32)> {
@@ -571,7 +579,8 @@ impl Sys {
         self.fd(pid, fd)?.preopen.clone().ok_or(errno::BADF)
     }
 
-    pub fn fd_readdir(&self, pid: u32, fd: u32) -> R<Vec<DirEnt>> {
+    pub fn fd_readdir(&mut self, pid: u32, fd: u32) -> R<Vec<DirEnt>> {
+        self.enter(pid);
         let path = match &self.fd(pid, fd)?.kind {
             FdKind::Dir { path } => path.clone(),
             _ => return Err(errno::NOTDIR),

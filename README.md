@@ -2,7 +2,7 @@
 
 A Linux-like OS that runs in a browser tab from a single local `index.html`, built on WebAssembly (no VM, no emulation of the OS itself).
 
-Status: 0.0.x pre-release. Boots a simulated first-boot tty with `msh`, a small shell (pipes, redirects, globs, ~40 builtins, Tab completion). The filesystem is RAM-only for now. Tested in Chromium and Firefox from `file://`.
+Status: 0.0.x pre-release. Boots a simulated first-boot tty with the real `brush` shell (bash-compatible) and uutils coreutils. There is a user/root permission model with setuid exec, plus `id`, `chmod`, `chown`, `stat`, a minimal custom `sudo`/`su` (not sudo-rs; no password prompts yet; `/etc/sudoers` is honored; root is locked, use `sudo -i`) and an `ip` reimplementation (link/addr/route on a virtual network namespace; not official iproute2, no real networking yet). The old `msh` shell remains as a fallback via `#msh` in the URL. The filesystem is RAM-only for now. Tested in Chromium and Firefox from `file://`.
 
 ## Build
 
