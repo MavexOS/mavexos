@@ -7,11 +7,36 @@ pub const COMMANDS: &[&str] = &[
     "tail", "touch", "tree", "true", "type", "uname", "unset", "wc", "which", "whoami",
 ];
 
+pub const SHELL_ONLY: &[&str] = &["cd", "export", "unset", "exit", "help", "clear", "which", "type"];
+
+pub struct ExecReq<'a> {
+    pub argv: &'a [String],
+    pub env: &'a BTreeMap<String, String>,
+    pub cwd: &'a str,
+    /// None means stdin is the terminal; Some is piped input.
+    pub stdin: Option<&'a str>,
+    /// True when stdout is the terminal (stdout and stderr come back merged in `out`).
+    pub tty: bool,
+}
+
+pub struct ExecRes {
+    pub out: String,
+    pub err: String,
+    pub code: i32,
+}
+
+pub trait Host {
+    fn with_vfs(&self, f: &mut dyn FnMut(&mut Vfs));
+    fn find_exe(&self, name: &str, path: &str, cwd: &str) -> Option<String>;
+    fn exec(&self, req: &ExecReq) -> Option<ExecRes>;
+}
+
 pub struct Shell {
     pub cwd: String,
     pub env: BTreeMap<String, String>,
     pub last: i32,
     pub exited: bool,
+    pub cols: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +156,7 @@ impl Shell {
         ] {
             env.insert(k.to_string(), v.to_string());
         }
-        Shell { cwd: "/home/user".into(), env, last: 0, exited: false }
+        Shell { cwd: "/home/user".into(), env, last: 0, exited: false, cols: 80 }
     }
 
     fn p(&self, s: &str) -> String {
@@ -365,7 +390,7 @@ impl Shell {
         Ok(out)
     }
 
-    pub fn run_line(&mut self, vfs: &mut Vfs, line: &str) -> String {
+    pub fn run_line(&mut self, host: &dyn Host, line: &str) -> String {
         let toks = match self.tokenize(line) {
             Ok(t) => t,
             Err(e) => {
@@ -385,7 +410,7 @@ impl Shell {
             if (conn == "&&" && self.last != 0) || (conn == "||" && self.last == 0) {
                 continue;
             }
-            self.run_pipeline(vfs, pipe, &mut display);
+            self.run_pipeline(host, pipe, &mut display);
             if self.exited {
                 break;
             }
@@ -431,31 +456,51 @@ impl Shell {
         out
     }
 
-    fn run_pipeline(&mut self, vfs: &mut Vfs, pipe: Vec<Cmd>, display: &mut String) {
+    fn run_pipeline(&mut self, host: &dyn Host, pipe: Vec<Cmd>, display: &mut String) {
         let n = pipe.len();
-        let mut stdin = String::new();
+        let mut stdin: Option<String> = None;
         for (idx, cmd) in pipe.into_iter().enumerate() {
+            let to_tty = idx + 1 == n && cmd.redir.is_none();
+            let mut globbed = Vec::new();
+            host.with_vfs(&mut |vfs| globbed = self.expand_globs(vfs, &cmd.words));
             let last = self.last.to_string();
-            let args: Vec<String> = self
-                .expand_globs(vfs, &cmd.words)
-                .into_iter()
-                .map(|a| a.replace('\u{1}', &last))
-                .collect();
+            let args: Vec<String> = globbed.into_iter().map(|a| a.replace('\u{1}', &last)).collect();
             let name = args[0].clone();
-            let res = self.run_cmd(vfs, &name, &args[1..], &stdin);
+            let input = stdin.take();
+            let path = self.env.get("PATH").cloned().unwrap_or_default();
+            let external = !SHELL_ONLY.contains(&name.as_str()) && host.find_exe(&name, &path, &self.cwd).is_some();
+            let res = if external {
+                let mut env = self.env.clone();
+                env.insert("COLUMNS".into(), self.cols.to_string());
+                env.insert("PWD".into(), self.cwd.clone());
+                let req = ExecReq { argv: &args, env: &env, cwd: &self.cwd, stdin: input.as_deref(), tty: to_tty };
+                match host.exec(&req) {
+                    Some(r) => Res { out: r.out, err: r.err, code: r.code },
+                    None => Res { out: String::new(), err: format!("msh: {}: cannot execute\n", name), code: 126 },
+                }
+            } else {
+                let text = input.unwrap_or_default();
+                let mut r = None;
+                host.with_vfs(&mut |vfs| r = Some(self.run_cmd(vfs, &name, &args[1..], &text)));
+                r.unwrap()
+            };
             display.push_str(&res.err);
             self.last = res.code;
             let mut out = res.out;
             if let Some((w, append)) = cmd.redir {
                 let path = self.p(&w.text);
-                let mut data = String::new();
-                if append {
-                    if let Ok(old) = vfs.read_file(&path) {
-                        data = String::from_utf8_lossy(&old).into_owned();
+                let mut failure = None;
+                host.with_vfs(&mut |vfs| {
+                    let mut data = String::new();
+                    if append {
+                        if let Ok(old) = vfs.read_file(&path) {
+                            data = String::from_utf8_lossy(&old).into_owned();
+                        }
                     }
-                }
-                data.push_str(&out);
-                if let Err(e) = vfs.write_file(&path, data.as_bytes()) {
+                    data.push_str(&out);
+                    failure = vfs.write_file(&path, data.as_bytes()).err();
+                });
+                if let Some(e) = failure {
                     display.push_str(&format!("msh: {}: {}\n", w.text, errstr(e)));
                     self.last = 1;
                 }
@@ -464,7 +509,7 @@ impl Shell {
             if idx + 1 == n {
                 display.push_str(&out);
             } else {
-                stdin = out;
+                stdin = Some(out);
             }
             if self.exited {
                 break;
@@ -1105,16 +1150,30 @@ mod tests {
         out
     }
 
-    fn setup() -> (Shell, Vfs) {
+    struct TestHost(std::cell::RefCell<Vfs>);
+
+    impl Host for TestHost {
+        fn with_vfs(&self, f: &mut dyn FnMut(&mut Vfs)) {
+            f(&mut self.0.borrow_mut());
+        }
+        fn find_exe(&self, _: &str, _: &str, _: &str) -> Option<String> {
+            None
+        }
+        fn exec(&self, _: &ExecReq) -> Option<ExecRes> {
+            None
+        }
+    }
+
+    fn setup() -> (Shell, TestHost) {
         let mut v = Vfs::new();
         for d in ["/home", "/home/user", "/tmp"] {
             v.mkdir(d, 0o755).unwrap();
         }
         v.set_creds(1000, 1000);
-        (Shell::new(), v)
+        (Shell::new(), TestHost(std::cell::RefCell::new(v)))
     }
 
-    fn run(sh: &mut Shell, v: &mut Vfs, line: &str) -> String {
+    fn run(sh: &mut Shell, v: &mut TestHost, line: &str) -> String {
         strip(&sh.run_line(v, line))
     }
 
@@ -1218,13 +1277,45 @@ mod tests {
         run(&mut sh, &mut v, "export FOO=bar");
         assert_eq!(run(&mut sh, &mut v, "echo $FOO"), "bar\n");
         run(&mut sh, &mut v, "mkdir docs && touch dog.txt");
-        let mut c = sh.complete(&v, "do", false);
+        let mut c = sh.complete(&v.0.borrow(), "do", false);
         c.sort();
         assert_eq!(c, vec!["docs/", "dog.txt"]);
-        assert_eq!(sh.complete(&v, "gre", true), vec!["grep"]);
+        assert_eq!(sh.complete(&v.0.borrow(), "gre", true), vec!["grep"]);
         assert!(run(&mut sh, &mut v, "tree").contains("docs"));
         assert!(run(&mut sh, &mut v, "stat dog.txt").contains("regular file"));
         run(&mut sh, &mut v, "exit");
         assert!(sh.exited);
+    }
+
+    struct ExtHost(TestHost);
+
+    impl Host for ExtHost {
+        fn with_vfs(&self, f: &mut dyn FnMut(&mut Vfs)) {
+            self.0.with_vfs(f)
+        }
+        fn find_exe(&self, name: &str, _: &str, _: &str) -> Option<String> {
+            (name == "ext").then(|| "/bin/ext".to_string())
+        }
+        fn exec(&self, req: &ExecReq) -> Option<ExecRes> {
+            Some(ExecRes {
+                out: format!("[{} stdin={:?} tty={} cols={}]\n", req.argv[1..].join(","), req.stdin, req.tty, req.env["COLUMNS"]),
+                err: String::new(),
+                code: 3,
+            })
+        }
+    }
+
+    #[test]
+    fn external_programs() {
+        let (mut sh, th) = setup();
+        let mut h = ExtHost(th);
+        sh.cols = 100;
+        assert_eq!(strip(&sh.run_line(&h, "ext a b")), "[a,b stdin=None tty=true cols=100]\n");
+        assert_eq!(sh.last, 3);
+        assert_eq!(strip(&sh.run_line(&h, "echo hi | ext x")), "[x stdin=Some(\"hi\\n\") tty=true cols=100]\n");
+        assert_eq!(strip(&sh.run_line(&h, "ext y | cat")), "[y stdin=None tty=false cols=100]\n");
+        sh.run_line(&h, "ext z > out");
+        assert_eq!(h.0 .0.borrow().read_file("/home/user/out").unwrap(), b"[z stdin=None tty=false cols=100]\n");
+        let _ = &mut h;
     }
 }
