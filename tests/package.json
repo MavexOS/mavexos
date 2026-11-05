@@ -1,0 +1,6 @@
+{
+  "name": "mavexos-tests",
+  "private": true,
+  "scripts": { "test": "node run.mjs" },
+  "devDependencies": { "playwright": "^1.50.0" }
+}
