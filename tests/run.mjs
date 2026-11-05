@@ -2,7 +2,7 @@ import { chromium, firefox } from "playwright";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-const url = pathToFileURL(resolve("../dist/index.html")).href + "#fast";
+const url = pathToFileURL(resolve("../dist/index.html")).href + "#fast,msh";
 let failed = false;
 
 const text = (p) => p.evaluate(() => document.getElementById("screen").innerText);

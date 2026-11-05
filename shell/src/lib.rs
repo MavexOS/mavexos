@@ -80,6 +80,8 @@ fn errstr(e: Errno) -> &'static str {
         Errno::NotEmpty => "Directory not empty",
         Errno::Inval => "Invalid argument",
         Errno::Loop => "Too many levels of symbolic links",
+        Errno::Acces => "Permission denied",
+        Errno::Perm => "Operation not permitted",
     }
 }
 
@@ -1169,6 +1171,8 @@ mod tests {
         for d in ["/home", "/home/user", "/tmp"] {
             v.mkdir(d, 0o755).unwrap();
         }
+        v.chown("/home/user", 1000, 1000).unwrap();
+        v.chmod("/tmp", 0o1777).unwrap();
         v.set_creds(1000, 1000);
         (Shell::new(), TestHost(std::cell::RefCell::new(v)))
     }

@@ -3,6 +3,8 @@ use mavex_vfs::{normalize, Errno as VErr, Ino, Kind, Stat, Vfs};
 use std::collections::{BTreeMap, VecDeque};
 
 pub mod errno {
+    pub const ACCES: u16 = 2;
+    pub const PERM: u16 = 63;
     pub const AGAIN: u16 = 6;
     pub const BADF: u16 = 8;
     pub const CHILD: u16 = 10;
@@ -39,6 +41,8 @@ fn verr(e: VErr) -> u16 {
         VErr::NotEmpty => errno::NOTEMPTY,
         VErr::Inval => errno::INVAL,
         VErr::Loop => errno::LOOP,
+        VErr::Acces => errno::ACCES,
+        VErr::Perm => errno::PERM,
     }
 }
 
@@ -89,6 +93,10 @@ pub struct Proc {
     pub cwd: String,
     pub exe: String,
     pub exit: Option<i32>,
+    pub uid: u32,
+    pub gid: u32,
+    pub euid: u32,
+    pub egid: u32,
     fds: BTreeMap<u32, Fd>,
 }
 
@@ -97,6 +105,7 @@ pub struct Sys {
     procs: BTreeMap<u32, Proc>,
     pipes: Vec<Option<Pipe>>,
     next_pid: u32,
+    default_cred: (u32, u32),
     pub tty_out: Vec<u8>,
     pub tty_in: VecDeque<u8>,
 }
@@ -109,7 +118,44 @@ pub struct DirEnt {
 
 impl Sys {
     pub fn new(vfs: Vfs) -> Self {
-        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, tty_out: Vec::new(), tty_in: VecDeque::new() }
+        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), tty_out: Vec::new(), tty_in: VecDeque::new() }
+    }
+
+    pub fn set_default_creds(&mut self, uid: u32, gid: u32) {
+        self.default_cred = (uid, gid);
+        self.vfs.set_creds(uid, gid);
+    }
+
+    pub fn enter_default(&mut self) {
+        let (u, g) = self.default_cred;
+        self.vfs.set_creds(u, g);
+    }
+
+    pub fn as_root(&mut self) {
+        self.vfs.set_creds(0, 0);
+    }
+
+    pub fn enter(&mut self, pid: u32) {
+        let (u, g) = self.procs.get(&pid).map(|p| (p.euid, p.egid)).unwrap_or(self.default_cred);
+        self.vfs.set_creds(u, g);
+    }
+
+    pub fn proc_creds(&self, pid: u32) -> R<(u32, u32, u32, u32)> {
+        let p = self.proc(pid)?;
+        Ok((p.uid, p.gid, p.euid, p.egid))
+    }
+
+    /// Privileged (euid 0) credential change: sets real and effective ids.
+    pub fn set_proc_creds(&mut self, pid: u32, uid: u32, gid: u32) -> R<()> {
+        let p = self.procs.get_mut(&pid).ok_or(errno::CHILD)?;
+        if p.euid != 0 {
+            return Err(errno::PERM);
+        }
+        p.uid = uid;
+        p.gid = gid;
+        p.euid = uid;
+        p.egid = gid;
+        Ok(())
     }
 
     fn proc(&self, pid: u32) -> R<&Proc> {
@@ -223,8 +269,24 @@ impl Sys {
     // ---- processes ----
     pub fn spawn(&mut self, ppid: u32, exe: String, argv: Vec<String>, env: Vec<String>, cwd: String, stdio: [Stdio; 3]) -> R<u32> {
         let pid = self.next_pid;
+        let (uid, gid, mut euid, mut egid) = match self.procs.get(&ppid) {
+            Some(pp) => (pp.uid, pp.gid, pp.euid, pp.egid),
+            None => (self.default_cred.0, self.default_cred.1, self.default_cred.0, self.default_cred.1),
+        };
+        self.enter(ppid);
+        if let Ok(st) = self.vfs.stat(&exe) {
+            if self.vfs.check_access(st.ino, 1).is_err() {
+                return Err(errno::ACCES);
+            }
+            if st.mode & 0o4000 != 0 {
+                euid = st.uid;
+            }
+            if st.mode & 0o2000 != 0 {
+                egid = st.gid;
+            }
+        }
         self.next_pid += 1;
-        self.procs.insert(pid, Proc { ppid, argv, env, cwd: cwd.clone(), exe, exit: None, fds: BTreeMap::new() });
+        self.procs.insert(pid, Proc { ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, fds: BTreeMap::new() });
         for (i, s) in stdio.iter().enumerate() {
             let kind = match *s {
                 Stdio::Tty => FdKind::Tty,
@@ -294,6 +356,7 @@ impl Sys {
     }
 
     pub fn path_open(&mut self, pid: u32, dirfd: u32, path: &str, creat: bool, directory: bool, excl: bool, trunc: bool, append: bool, read: bool, write: bool) -> R<u32> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         match self.vfs.stat(&abs) {
             Ok(st) if st.kind == Kind::Dir => {
@@ -306,25 +369,31 @@ impl Sys {
             _ => {}
         }
         let ino = self.vfs.open_file(&abs, creat, excl, trunc && write).map_err(verr)?;
+        let want = (if read { 4 } else { 0 }) | (if write { 2 } else { 0 });
+        self.vfs.check_access(ino, want).map_err(verr)?;
         self.open_fd(pid, Fd { kind: FdKind::File { ino, off: 0, append, read, write }, preopen: None })
     }
 
     pub fn path_mkdir(&mut self, pid: u32, dirfd: u32, path: &str) -> R<()> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         self.vfs.mkdir(&abs, 0o755).map_err(verr)
     }
 
     pub fn path_rmdir(&mut self, pid: u32, dirfd: u32, path: &str) -> R<()> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         self.vfs.rmdir(&abs).map_err(verr)
     }
 
     pub fn path_unlink(&mut self, pid: u32, dirfd: u32, path: &str) -> R<()> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         self.vfs.unlink(&abs).map_err(verr)
     }
 
     pub fn path_rename(&mut self, pid: u32, d1: u32, p1: &str, d2: u32, p2: &str) -> R<()> {
+        self.enter(pid);
         let a = self.resolve(pid, d1, p1)?;
         let b = self.resolve(pid, d2, p2)?;
         if let (Ok(src), Ok(dst)) = (self.vfs.lstat(&a), self.vfs.lstat(&b)) {
@@ -336,16 +405,19 @@ impl Sys {
     }
 
     pub fn path_symlink(&mut self, pid: u32, target: &str, dirfd: u32, path: &str) -> R<()> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         self.vfs.symlink(target, &abs).map_err(verr)
     }
 
-    pub fn path_readlink(&self, pid: u32, dirfd: u32, path: &str) -> R<String> {
+    pub fn path_readlink(&mut self, pid: u32, dirfd: u32, path: &str) -> R<String> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         self.vfs.readlink(&abs).map_err(verr)
     }
 
-    pub fn path_stat(&self, pid: u32, dirfd: u32, path: &str, follow: bool) -> R<Stat> {
+    pub fn path_stat(&mut self, pid: u32, dirfd: u32, path: &str, follow: bool) -> R<Stat> {
+        self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         (if follow { self.vfs.stat(&abs) } else { self.vfs.lstat(&abs) }).map_err(verr)
     }

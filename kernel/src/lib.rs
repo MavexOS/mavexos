@@ -24,6 +24,7 @@ fn with_sys<R>(f: impl FnOnce(&mut Sys) -> R) -> R {
     SYS.with(|s| {
         let mut s = s.borrow_mut();
         s.vfs.set_time(unsafe { now_ns() } as u64);
+        s.as_root();
         f(&mut s)
     })
 }
@@ -37,6 +38,8 @@ fn errno_code(e: Errno) -> i32 {
         Errno::NotEmpty => 39,
         Errno::Inval => 22,
         Errno::Loop => 40,
+        Errno::Acces => 13,
+        Errno::Perm => 1,
     }
 }
 
@@ -218,6 +221,40 @@ pub extern "C" fn k_tty_take() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn k_proc_creds(pid: u32) -> i32 {
+    with_sys(|s| wr(s.proc_creds(pid), |(u, g, eu, eg)| {
+        let mut b = Vec::new();
+        for v in [u, g, eu, eg] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        stage(b)
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn k_setcreds(pid: u32, uid: u32, gid: u32) -> i32 {
+    with_sys(|s| wr(s.set_proc_creds(pid, uid, gid), |_| 0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_chmod_as(pid: u32, p: *const u8, n: usize, mode: u32) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| {
+        s.enter(pid);
+        ret(s.vfs.chmod(path, mode))
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_chown_as(pid: u32, p: *const u8, n: usize, uid: u32, gid: u32) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| {
+        s.enter(pid);
+        ret(s.vfs.chown(path, uid, gid))
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn k_fd_dup(pid: u32, fd: u32) -> i32 {
     with_sys(|s| wr(s.fd_dup(pid, fd), |n| n as i32))
 }
@@ -384,7 +421,10 @@ struct KHost;
 
 impl Host for KHost {
     fn with_vfs(&self, f: &mut dyn FnMut(&mut Vfs)) {
-        with_sys(|s| f(&mut s.vfs));
+        with_sys(|s| {
+            s.enter_default();
+            f(&mut s.vfs)
+        });
     }
 
     fn find_exe(&self, name: &str, path: &str, cwd: &str) -> Option<String> {
@@ -486,7 +526,14 @@ pub extern "C" fn kmain() {
         v.write_file("/etc/os-release", format!("NAME=MavexOS\nVERSION={}\nID=mavexos\n", ver).as_bytes()).unwrap();
         v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
         v.chown("/home/user", 1000, 1000).unwrap();
-        v.set_creds(1000, 1000);
+        v.mkdir("/root", 0o700).unwrap();
+        v.write_file("/etc/passwd", b"root:x:0:0:root:/root:/bin/brush\nuser:x:1000:1000:User:/home/user:/bin/brush\n").unwrap();
+        v.write_file("/etc/group", b"root:x:0:\nsudo:x:27:user\nuser:x:1000:\n").unwrap();
+        v.write_file("/etc/shadow", b"root:!:19000:0:99999:7:::\nuser:*:19000:0:99999:7:::\n").unwrap();
+        v.chmod("/etc/shadow", 0o600).unwrap();
+        v.write_file("/etc/sudoers", b"# MavexOS sudoers (no password prompts: ttys cannot block yet)\nroot ALL=(ALL) ALL\n%sudo ALL=(ALL) NOPASSWD: ALL\n").unwrap();
+        v.chmod("/etc/sudoers", 0o440).unwrap();
+        s.set_default_creds(1000, 1000);
     });
     print("[ ok ] vfs: in-memory root filesystem mounted at /\n");
     print("[ ok ] process layer: pid table, fds, pipes, tty ready\n");
