@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel"]
+members = ["kernel", "vfs"]
 resolver = "2"
 
 [profile.release]
