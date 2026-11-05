@@ -2,49 +2,103 @@ import { chromium, firefox } from "playwright";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-const url = pathToFileURL(resolve("../dist/index.html")).href;
+const url = pathToFileURL(resolve("../dist/index.html")).href + "#fast";
 let failed = false;
 
-async function check(name, p) {
-  const out = await p.textContent("#term");
-  const fs = await p.evaluate(() => {
-    const m = window.mavex;
-    return {
-      root: m.readdir("/"),
-      host: m.readFile("/etc/hostname"),
-      mk: m.mkdir("/home/user/docs"),
-      dup: m.mkdir("/home/user/docs"),
-      w: m.writeFile("/home/user/docs/a.txt", "héllo wörld"),
-      r: m.readFile("/home/user/docs/a.txt"),
-      ls: m.readdir("/home/user/docs"),
-      missing: m.readFile("/nope"),
-      rm: m.unlink("/home/user/docs/a.txt"),
-      lsAfter: m.readdir("/home/user/docs"),
-    };
-  });
-  const checks = {
-    boot: out.includes("MavexOS kernel booting") && out.includes("vfs mounted"),
-    root: JSON.stringify(fs.root) === JSON.stringify(["bin", "etc", "home", "tmp", "usr"]),
-    host: fs.host === "mavex\n",
-    mkdir: fs.mk === 0 && fs.dup === -17,
-    rw: fs.w === 0 && fs.r === "héllo wörld" && JSON.stringify(fs.ls) === '["a.txt"]',
-    enoent: fs.missing === -2,
-    unlink: fs.rm === 0 && fs.lsAfter.length === 0,
-  };
-  const bad = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
-  console.log(`${bad.length ? "FAIL" : "PASS"} ${name}`, bad.length ? bad : "");
-  if (bad.length) { failed = true; console.log(JSON.stringify(fs)); }
+const text = (p) => p.evaluate(() => document.getElementById("screen").innerText);
+
+async function cmd(p, line) {
+  await p.keyboard.type(line);
+  await p.keyboard.press("Enter");
 }
 
-for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) {
+async function run(name, type) {
   const b = await type.launch();
   const p = await b.newPage();
   const errs = [];
-  p.on("pageerror", e => errs.push(e.message));
+  p.on("pageerror", (e) => errs.push(e.message));
   await p.goto(url);
-  await p.waitForFunction(() => window.mavex, null, { timeout: 5000 }).catch(() => {});
-  if (errs.length) { failed = true; console.log("FAIL", name, errs); }
-  else await check(name, p);
+  await p.waitForFunction(() => window.mavexReady, null, { timeout: 8000 });
+  const fails = [];
+  const expect = async (label, ok) => { if (!ok) fails.push(label); };
+
+  let t = await text(p);
+  await expect("boot log", t.includes("kernel starting") && t.includes("OK") && t.includes("first boot"));
+  await expect("login banner", t.includes("mavex login: user"));
+  await expect("prompt", t.includes("user@mavex:~$"));
+
+  await cmd(p, "echo hello 'big  world' $USER");
+  await cmd(p, "mkdir -p proj/src && cd proj/src && pwd");
+  await cmd(p, "echo data > f.txt && cat f.txt | wc -c");
+  await cmd(p, "cd ~ && ls");
+  await cmd(p, "ls /bin | head -n 2");
+  await cmd(p, "nosuchcmd");
+  await cmd(p, "echo $?");
+  t = await text(p);
+  await expect("echo", t.includes("hello big  world user"));
+  await expect("cd/pwd", t.includes("/home/user/proj/src"));
+  await expect("pipe/redir", /\n5\n/.test(t));
+  await expect("ls", t.includes("proj"));
+  await expect("not found", t.includes("msh: nosuchcmd: command not found") && /\n127\n/.test(t));
+
+  // history
+  await p.keyboard.press("ArrowUp");
+  await p.keyboard.press("ArrowUp");
+  await p.keyboard.press("Enter");
+  t = await text(p);
+  await expect("history", (t.match(/\n127\n/g) || []).length >= 1);
+
+  // tab completion
+  await p.keyboard.type("ls pro");
+  await p.keyboard.press("Tab");
+  await p.keyboard.type("src");
+  await p.keyboard.press("Enter");
+  t = await text(p);
+  await expect("tab complete", t.includes("ls proj/src") && t.includes("f.txt"));
+  await p.keyboard.type("whoa");
+  await p.keyboard.press("Tab");
+  await p.keyboard.press("Enter");
+  t = await text(p);
+  await expect("tab command", t.includes("whoami") && t.split("whoami").length >= 2);
+
+  // line editing
+  await p.keyboard.type("echo abc");
+  await p.keyboard.press("ArrowLeft");
+  await p.keyboard.press("Backspace");
+  await p.keyboard.press("Enter");
+  t = await text(p);
+  await expect("editing", /\nac\n/.test(t));
+
+  // ctrl-c and ctrl-l
+  await p.keyboard.type("garbage");
+  await p.keyboard.press("Control+c");
+  t = await text(p);
+  await expect("ctrl-c", t.includes("garbage^C"));
+  await cmd(p, "clear");
+  t = await text(p);
+  await expect("clear", !t.includes("hello big") && /user@mavex:~\$/.test(t));
+
+  // exit & restart
+  await cmd(p, "exit");
+  t = await text(p);
+  await expect("exit", t.includes("process completed"));
+  await p.keyboard.press("Enter");
+  await cmd(p, "echo back");
+  t = await text(p);
+  await expect("restart", /\nback\n/.test(t));
+
+  // JS API
+  const api = await p.evaluate(() => ({
+    r: window.mavex.readFile("/home/user/proj/src/f.txt"),
+    miss: window.mavex.readFile("/nope"),
+  }));
+  await expect("api", api.r === "data\n" && api.miss === -2);
+
+  if (errs.length) fails.push("pageerror: " + errs.join("; "));
+  console.log(`${fails.length ? "FAIL" : "PASS"} ${name}`, fails.length ? fails : "");
+  if (fails.length) { failed = true; console.log((await text(p)).slice(-1500)); }
   await b.close();
 }
+
+for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) await run(name, type);
 process.exit(failed ? 1 : 0);

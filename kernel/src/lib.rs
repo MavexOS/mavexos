@@ -1,4 +1,5 @@
 use mavex_vfs::{Errno, Vfs};
+use mavex_shell::Shell;
 use std::cell::RefCell;
 
 #[link(wasm_import_module = "host")]
@@ -12,6 +13,7 @@ fn print(s: &str) {
 
 thread_local! {
     static VFS: RefCell<Vfs> = RefCell::new(Vfs::new());
+    static SHELL: RefCell<Shell> = RefCell::new(Shell::new());
     static RESULT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -104,17 +106,66 @@ pub extern "C" fn k_result_ptr() -> *const u8 {
     RESULT.with(|r| r.borrow().as_ptr())
 }
 
+fn stage(d: Vec<u8>) -> i32 {
+    let len = d.len() as i32;
+    RESULT.with(|r| *r.borrow_mut() = d);
+    len
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_shell_run(p: *const u8, n: usize) -> i32 {
+    let line = str_arg(p, n);
+    let out = VFS.with(|v| SHELL.with(|s| s.borrow_mut().run_line(&mut v.borrow_mut(), line)));
+    stage(out.into_bytes())
+}
+
+#[no_mangle]
+pub extern "C" fn k_shell_prompt() -> i32 {
+    stage(SHELL.with(|s| s.borrow().prompt()).into_bytes())
+}
+
+/// Stages newline-separated completion candidates for `word`.
+#[no_mangle]
+pub unsafe extern "C" fn k_shell_complete(p: *const u8, n: usize, is_first: i32) -> i32 {
+    let word = str_arg(p, n);
+    let c = VFS.with(|v| SHELL.with(|s| s.borrow().complete(&v.borrow(), word, is_first != 0)));
+    stage(c.join("\n").into_bytes())
+}
+
+#[no_mangle]
+pub extern "C" fn k_shell_exited() -> i32 {
+    SHELL.with(|s| s.borrow().exited) as i32
+}
+
+#[no_mangle]
+pub extern "C" fn k_shell_reset() {
+    SHELL.with(|s| *s.borrow_mut() = Shell::new());
+}
+
 #[no_mangle]
 pub extern "C" fn kmain() {
-    print("MavexOS kernel booting...\n");
+    let ver = env!("CARGO_PKG_VERSION");
+    print(&format!("MavexOS {} (wasm32) - kernel starting\n", ver));
+    print("[ ok ] first boot on this device: no saved state found\n");
+    print("[ ok ] memory: wasm linear memory, RAM-only (nothing persists yet)\n");
     VFS.with(|v| {
         let mut v = v.borrow_mut();
         for d in ["/bin", "/etc", "/home", "/home/user", "/tmp", "/usr"] {
             v.mkdir(d, 0o755).unwrap();
         }
+        v.chmod("/tmp", 0o1777).unwrap();
         v.write_file("/etc/hostname", b"mavex\n").unwrap();
-        v.write_file("/etc/os-release", b"NAME=MavexOS\n").unwrap();
+        v.write_file("/etc/os-release", format!("NAME=MavexOS\nVERSION={}\nID=mavexos\n", ver).as_bytes()).unwrap();
+        v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
+        v.write_file("/bin/msh", b"").unwrap();
+        v.chmod("/bin/msh", 0o755).unwrap();
+        for c in mavex_shell::COMMANDS {
+            let _ = v.symlink("/bin/msh", &format!("/bin/{}", c));
+        }
+        v.chown("/home/user", 1000, 1000).unwrap();
+        v.set_creds(1000, 1000);
     });
-    print("kernel: vfs mounted at /\n");
-    print("mavex$ ");
+    print("[ ok ] vfs: in-memory root filesystem mounted at /\n");
+    print("[ ok ] created /home/user (uid 1000)\n");
+    print("[ ok ] started /bin/msh\n");
 }

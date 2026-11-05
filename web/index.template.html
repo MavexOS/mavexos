@@ -2,45 +2,211 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MavexOS</title>
 <style>
   html,body{margin:0;height:100%;background:#0b0e14;color:#c8d3e0}
-  #term{box-sizing:border-box;height:100%;padding:12px;margin:0;overflow:auto;
-        font:14px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap}
+  #screen{box-sizing:border-box;height:100%;padding:12px;overflow:auto;cursor:text;
+          font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}
+  pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
+  #cur{background:#c8d3e0;color:#0b0e14;animation:blink 1s steps(1) infinite}
+  #cur.idle{animation:none}
+  @keyframes blink{50%{background:transparent;color:inherit}}
+  #sink{position:fixed;left:-1000px;top:0;width:1px;height:1px;opacity:0}
+  .b{font-weight:bold}
+  .c30{color:#4c566a}.c31{color:#e06c75}.c32{color:#98c379}.c33{color:#e5c07b}
+  .c34{color:#61afef}.c35{color:#c678dd}.c36{color:#56b6c2}.c37{color:#c8d3e0}
+  .c90{color:#6b7689}.c91{color:#ff7b86}.c92{color:#b5e890}.c93{color:#f0d08c}
+  .c94{color:#7cc0ff}.c95{color:#d68fee}.c96{color:#6fd0dc}.c97{color:#fff}
 </style>
 </head>
 <body>
-<pre id="term"></pre>
+<div id="screen">
+  <pre id="out"></pre>
+  <pre id="line"><span id="prompt"></span><span id="before"></span><span id="cur"> </span><span id="after"></span></pre>
+</div>
+<textarea id="sink" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
 <script>
 const KERNEL_WASM_B64 = "__KERNEL_WASM_BASE64__";
-const term = document.getElementById("term");
-const bytes = Uint8Array.from(atob(KERNEL_WASM_B64), c => c.charCodeAt(0));
-let mem;
-const imports = { host: {
-  console_write(ptr, len) {
-    term.textContent += new TextDecoder().decode(new Uint8Array(mem.buffer, ptr, len));
-  }
-}};
-WebAssembly.instantiate(bytes, imports).then(({instance}) => {
-  mem = instance.exports.memory;
-  instance.exports.kmain();
-  window.mavex = makeSyscalls(instance.exports);
-  window.dispatchEvent(new Event("mavex-ready"));
-});
+const $ = (id) => document.getElementById(id);
+const screenEl = $("screen"), out = $("out"), lineEl = $("line");
+const FAST = location.hash.includes("fast");
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function makeSyscalls(k) {
-  const enc = new TextEncoder(), dec = new TextDecoder();
-  const put = (bytes) => { const p = k.k_alloc(bytes.length); new Uint8Array(mem.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
-  const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { k.k_free(p, n); } };
-  const staged = (n) => dec.decode(new Uint8Array(mem.buffer, k.k_result_ptr(), n));
-  return {
-    mkdir: (path) => withStr(path, (p, n) => k.k_mkdir(p, n)),
-    unlink: (path) => withStr(path, (p, n) => k.k_unlink(p, n)),
-    writeFile: (path, text) => withStr(path, (p, n) => { const [d, dn] = put(enc.encode(text)); try { return k.k_write_file(p, n, d, dn); } finally { k.k_free(d, dn); } }),
-    readFile: (path) => withStr(path, (p, n) => { const r = k.k_read_file(p, n); return r < 0 ? r : staged(r); }),
-    readdir: (path) => withStr(path, (p, n) => { const r = k.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
-  };
+/* ---------- ANSI output ---------- */
+let sgr = { cls: "" };
+function ansiToNodes(text) {
+  const re = /\x1b\[([0-9;]*)([A-Za-z])/g;
+  let last = 0, m;
+  const emit = (s) => { if (!s) return; const sp = document.createElement("span"); if (sgr.cls) sp.className = sgr.cls; sp.textContent = s; out.appendChild(sp); };
+  while ((m = re.exec(text))) {
+    emit(text.slice(last, m.index));
+    last = re.lastIndex;
+    if (m[2] === "J") { out.textContent = ""; }
+    else if (m[2] === "m") {
+      const codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
+      let bold = sgr.cls.includes("b"), fg = (sgr.cls.match(/c\d+/) || [""])[0];
+      for (const c of codes) {
+        if (c === 0) { bold = false; fg = ""; }
+        else if (c === 1) bold = true;
+        else if (c === 22) bold = false;
+        else if (c === 39) fg = "";
+        else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) fg = "c" + c;
+      }
+      sgr.cls = [bold ? "b" : "", fg].filter(Boolean).join(" ");
+    }
+  }
+  emit(text.slice(last));
 }
+function write(text) { ansiToNodes(text); scrollDown(); }
+function scrollDown() { screenEl.scrollTop = screenEl.scrollHeight; }
+
+/* ---------- kernel ---------- */
+let mem, K, bootBuf = "";
+const enc = new TextEncoder(), dec = new TextDecoder();
+const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(mem.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
+const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { K.k_free(p, n); } };
+const staged = (n) => dec.decode(new Uint8Array(mem.buffer, K.k_result_ptr(), n));
+const sys = {
+  mkdir: (path) => withStr(path, (p, n) => K.k_mkdir(p, n)),
+  unlink: (path) => withStr(path, (p, n) => K.k_unlink(p, n)),
+  writeFile: (path, text) => withStr(path, (p, n) => { const [d, dn] = put(enc.encode(text)); try { return K.k_write_file(p, n, d, dn); } finally { K.k_free(d, dn); } }),
+  readFile: (path) => withStr(path, (p, n) => { const r = K.k_read_file(p, n); return r < 0 ? r : staged(r); }),
+  readdir: (path) => withStr(path, (p, n) => { const r = K.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
+  shellRun: (line) => withStr(line, (p, n) => staged(K.k_shell_run(p, n))),
+  prompt: () => staged(K.k_shell_prompt()),
+  complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
+  exited: () => K.k_shell_exited() === 1,
+  reset: () => K.k_shell_reset(),
+};
+
+/* ---------- line editor ---------- */
+let buf = "", pos = 0, history = [], hidx = 0, draft = "", promptText = "", live = false, dead = false;
+const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+function renderPrompt() {
+  const el = $("prompt"); el.textContent = "";
+  const re = /\x1b\[([0-9;]*)m/g; let last = 0, m, cls = "";
+  const add = (s) => { if (!s) return; const sp = document.createElement("span"); if (cls) sp.className = cls; sp.textContent = s; el.appendChild(sp); };
+  while ((m = re.exec(promptText))) {
+    add(promptText.slice(last, m.index)); last = re.lastIndex;
+    const codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
+    let bold = cls.includes("b"), fg = (cls.match(/c\d+/) || [""])[0];
+    for (const c of codes) { if (c === 0) { bold = false; fg = ""; } else if (c === 1) bold = true; else if (c >= 30 && c <= 37) fg = "c" + c; }
+    cls = [bold ? "b" : "", fg].filter(Boolean).join(" ");
+  }
+  add(promptText.slice(last));
+}
+function renderLine() {
+  $("before").textContent = buf.slice(0, pos);
+  $("cur").textContent = pos < buf.length ? buf[pos] : " ";
+  $("after").textContent = buf.slice(pos + 1);
+  scrollDown();
+}
+function showLine(show) { lineEl.style.display = show ? "" : "none"; }
+function newPrompt() { promptText = sys.prompt(); renderPrompt(); buf = ""; pos = 0; hidx = history.length; renderLine(); showLine(true); live = true; }
+
+function commitInput(extra) {
+  write(promptText); // colored prompt echo
+  write(buf + (extra || "") + "\n");
+}
+function enter() {
+  const line = buf;
+  live = false;
+  if (dead) { write(promptText + "\n"); dead = false; sys.reset(); write("\x1b[0m"); newPrompt(); return; }
+  commitInput();
+  if (line.trim() && history[history.length - 1] !== line) history.push(line);
+  if (line.trim()) write(sys.shellRun(line));
+  if (sys.exited()) { dead = true; write("\n[process completed - press Enter to restart]\n"); promptText = ""; buf = ""; pos = 0; renderPrompt(); renderLine(); live = true; return; }
+  newPrompt();
+}
+function setBuf(s) { buf = s; pos = s.length; renderLine(); }
+function prevWordStart() { let i = pos; while (i > 0 && buf[i - 1] === " ") i--; while (i > 0 && buf[i - 1] !== " ") i--; return i; }
+function commonPrefix(a) { let p = a[0]; for (const s of a) while (!s.startsWith(p)) p = p.slice(0, -1); return p; }
+function tab() {
+  const left = buf.slice(0, pos);
+  const start = left.lastIndexOf(" ") + 1;
+  const word = left.slice(start);
+  const isFirst = left.slice(0, start).trim() === "";
+  const c = sys.complete(word, isFirst);
+  if (!c.length) return;
+  if (c.length === 1) {
+    const rep = c[0] + (c[0].endsWith("/") ? "" : " ");
+    buf = buf.slice(0, start) + rep + buf.slice(pos); pos = start + rep.length; renderLine(); return;
+  }
+  const pre = commonPrefix(c);
+  if (pre.length > word.length) { buf = buf.slice(0, start) + pre + buf.slice(pos); pos = start + pre.length; renderLine(); return; }
+  write(promptText); write(buf + "\n" + c.join("  ") + "\n"); renderLine();
+}
+function insert(s) { buf = buf.slice(0, pos) + s + buf.slice(pos); pos += s.length; renderLine(); }
+
+document.addEventListener("keydown", (e) => {
+  if (!live) return;
+  const k = e.key;
+  if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    const l = k.toLowerCase();
+    if (l === "c" && !(window.getSelection().toString())) { e.preventDefault(); write(promptText); write(buf + "^C\n"); newPrompt(); return; }
+    if (l === "c") return;
+    if (l === "v") return;
+    if (l === "l") { e.preventDefault(); out.textContent = ""; renderLine(); return; }
+    if (l === "u") { e.preventDefault(); buf = buf.slice(pos); pos = 0; renderLine(); return; }
+    if (l === "k") { e.preventDefault(); buf = buf.slice(0, pos); renderLine(); return; }
+    if (l === "a") { e.preventDefault(); pos = 0; renderLine(); return; }
+    if (l === "e") { e.preventDefault(); pos = buf.length; renderLine(); return; }
+    if (l === "w") { e.preventDefault(); const s = prevWordStart(); buf = buf.slice(0, s) + buf.slice(pos); pos = s; renderLine(); return; }
+    if (l === "d") { e.preventDefault(); if (!buf.length) { buf = "exit"; pos = 4; enter(); } return; }
+    return;
+  }
+  if (e.metaKey || e.altKey) return;
+  switch (k) {
+    case "Enter": e.preventDefault(); enter(); return;
+    case "Backspace": e.preventDefault(); if (pos > 0) { buf = buf.slice(0, pos - 1) + buf.slice(pos); pos--; renderLine(); } return;
+    case "Delete": e.preventDefault(); if (pos < buf.length) { buf = buf.slice(0, pos) + buf.slice(pos + 1); renderLine(); } return;
+    case "ArrowLeft": e.preventDefault(); if (pos > 0) { pos--; renderLine(); } return;
+    case "ArrowRight": e.preventDefault(); if (pos < buf.length) { pos++; renderLine(); } return;
+    case "Home": e.preventDefault(); pos = 0; renderLine(); return;
+    case "End": e.preventDefault(); pos = buf.length; renderLine(); return;
+    case "ArrowUp": e.preventDefault(); if (hidx > 0) { if (hidx === history.length) draft = buf; hidx--; setBuf(history[hidx]); } return;
+    case "ArrowDown": e.preventDefault(); if (hidx < history.length) { hidx++; setBuf(hidx === history.length ? draft : history[hidx]); } return;
+    case "Tab": e.preventDefault(); tab(); return;
+  }
+  if (k.length === 1) { e.preventDefault(); insert(k); }
+});
+document.addEventListener("paste", (e) => {
+  if (!live) return;
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData("text");
+  const parts = text.replace(/\r/g, "").split("\n");
+  parts.forEach((p, i) => { insert(p); if (i < parts.length - 1) enter(); });
+});
+screenEl.addEventListener("click", () => { if (!window.getSelection().toString()) $("sink").focus(); });
+$("sink").addEventListener("input", (e) => { const v = e.target.value; e.target.value = ""; if (live && v) insert(v.replace(/\n/g, "")); });
+
+/* ---------- boot ---------- */
+async function boot() {
+  showLine(false);
+  const bytes = Uint8Array.from(atob(KERNEL_WASM_B64), c => c.charCodeAt(0));
+  const imports = { host: { console_write(ptr, len) { bootBuf += dec.decode(new Uint8Array(mem.buffer, ptr, len)); } } };
+  const { instance } = await WebAssembly.instantiate(bytes, imports);
+  K = instance.exports; mem = K.memory;
+  write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
+  if (!FAST) await sleep(350);
+  K.kmain();
+  window.mavex = sys;
+  for (const l of bootBuf.split("\n").filter(Boolean)) {
+    const m = l.match(/^\[ ok \](.*)$/);
+    write(m ? "[ \x1b[1;32m OK \x1b[0m ]" + m[1] + "\n" : l + "\n");
+    if (!FAST) await sleep(120 + Math.random() * 180);
+  }
+  if (!FAST) await sleep(300);
+  const ver = (bootBuf.match(/MavexOS ([0-9.]+)/) || [0, "?"])[1];
+  write("\nMavexOS " + ver + " tty1\n\nmavex login: user (automatic login)\n");
+  write(sys.readFile("/etc/motd") + "\n");
+  newPrompt();
+  $("sink").focus();
+  window.mavexReady = true;
+  window.dispatchEvent(new Event("mavex-ready"));
+}
+boot().catch((e) => { write("\n\x1b[1;31mkernel panic: " + e + "\x1b[0m\n"); throw e; });
 </script>
 </body>
 </html>
