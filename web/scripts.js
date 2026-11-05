@@ -15,15 +15,17 @@ function ansiToNodes(text) {
     if (m[2] === "J") { out.textContent = ""; }
     else if (m[2] === "m") {
       const codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
-      let bold = sgr.cls.includes("b"), fg = (sgr.cls.match(/c\d+/) || [""])[0];
+      let bold = sgr.cls.includes("b"), fg = (sgr.cls.match(/c\d+/) || [""])[0], bg = (sgr.cls.match(/g\d+/) || [""])[0];
       for (const c of codes) {
-        if (c === 0) { bold = false; fg = ""; }
+        if (c === 0) { bold = false; fg = ""; bg = ""; }
         else if (c === 1) bold = true;
         else if (c === 22) bold = false;
         else if (c === 39) fg = "";
+        else if (c === 49) bg = "";
         else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) fg = "c" + c;
+        else if ((c >= 40 && c <= 47) || (c >= 100 && c <= 107)) bg = "g" + c;
       }
-      sgr.cls = [bold ? "b" : "", fg].filter(Boolean).join(" ");
+      sgr.cls = [bold ? "b" : "", fg, bg].filter(Boolean).join(" ");
     }
   }
   emit(text.slice(last));
@@ -185,7 +187,7 @@ async function boot() {
   K.kmain();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "neofetch", "fastfetch"]);
   R.installSetuid("mavexutils", ["sudo", "su"]);
   if (useBrush) startLogin();
   fitCols();

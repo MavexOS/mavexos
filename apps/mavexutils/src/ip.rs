@@ -1,5 +1,14 @@
 //! `ip`: a MavexOS reimplementation of an iproute2 subset (not the official iproute2) over the virtual netns.
 use crate::net_request;
+use std::cell::Cell;
+use std::io::IsTerminal;
+
+thread_local!(static COLOR: Cell<bool> = const { Cell::new(false) });
+fn p(code: &str, s: &str) -> String { if COLOR.with(|c| c.get()) { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() } }
+fn name_c(l: &Link) -> String { p(if l.up { "32" } else { "31" }, &l.name) }
+fn state_c(l: &Link) -> String { p(if l.up { "32" } else { "31" }, state(l)) }
+fn flags_c(l: &Link) -> String { flags(l).split(',').map(|f| match f { "UP" | "LOWER_UP" => p("32", f), "LOOPBACK" => p("33", f), _ => f.to_string() }).collect::<Vec<_>>().join(",") }
+fn ip_c(fam: u8, s: &str) -> String { p(if fam == 4 { "34" } else { "35" }, s) }
 
 struct Link { idx: u32, name: String, up: bool, mtu: u32, kind: String, mac: String }
 struct Addr { idx: u32, fam: u8, addr: String, plen: u32, scope: String }
@@ -32,7 +41,7 @@ fn j(s: &str) -> String { s.replace('\\', "\\\\").replace('"', "\\\"") }
 
 fn link_lines(l: &Link) -> String {
     let (lt, brd) = if l.kind == "loopback" { ("loopback", "00:00:00:00:00:00") } else { ("ether", "ff:ff:ff:ff:ff:ff") };
-    format!("{}: {}: <{}> mtu {} qdisc {} state {} mode DEFAULT group default qlen 1000\n    link/{} {} brd {}\n", l.idx, l.name, flags(l), l.mtu, if l.kind == "loopback" { "noqueue" } else { "noop" }, state(l), lt, l.mac, brd)
+    format!("{}: {}: <{}> mtu {} qdisc {} state {} mode DEFAULT group default qlen 1000\n    link/{} {} brd {}\n", l.idx, name_c(l), flags_c(l), l.mtu, if l.kind == "loopback" { "noqueue" } else { "noop" }, state_c(l), p("33", lt), p("33", &l.mac), p("33", brd))
 }
 
 fn show_link(args: &[String], br: bool, json: bool) -> i32 {
@@ -44,7 +53,7 @@ fn show_link(args: &[String], br: bool, json: bool) -> i32 {
         let items: Vec<String> = ls.iter().map(|l| format!("{{\"ifindex\":{},\"ifname\":\"{}\",\"flags\":[{}],\"mtu\":{},\"operstate\":\"{}\",\"link_type\":\"{}\",\"address\":\"{}\"}}", l.idx, j(&l.name), flags(l).split(',').map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(","), l.mtu, state(l), if l.kind == "loopback" { "loopback" } else { "ether" }, l.mac)).collect();
         println!("[{}]", items.join(","));
     } else if br {
-        for l in ls { println!("{:<16} {:<14} {} <{}>", l.name, state(l), l.mac, flags(l)); }
+        for l in ls { println!("{}{} {}{} {} <{}>", name_c(l), " ".repeat(16usize.saturating_sub(l.name.len())), state_c(l), " ".repeat(14usize.saturating_sub(state(l).len())), p("33", &l.mac), flags_c(l)); }
     } else {
         for l in ls { print!("{}", link_lines(l)); }
     }
@@ -68,14 +77,15 @@ fn show_addr(args: &[String], br: bool, json: bool, fam: Option<u8>) -> i32 {
         let mine: Vec<&Addr> = ad.iter().filter(|a| a.idx == l.idx && fam.is_none_or(|f| f == a.fam)).collect();
         if br {
             let list: Vec<String> = mine.iter().map(|a| format!("{}/{}", a.addr, a.plen)).collect();
-            println!("{:<16} {:<14} {}", l.name, state(l), list.join(" "));
+            let list: Vec<String> = mine.iter().map(|a| ip_c(a.fam, &format!("{}/{}", a.addr, a.plen))).collect();
+            println!("{}{} {}{} {}", name_c(l), " ".repeat(16usize.saturating_sub(l.name.len())), state_c(l), " ".repeat(14usize.saturating_sub(state(l).len())), list.join(" "));
             continue;
         }
         print!("{}", link_lines(l));
         for a in mine {
             let dev = &l.name;
-            if a.fam == 4 { println!("    inet {}/{} scope {} {}\n       valid_lft forever preferred_lft forever", a.addr, a.plen, a.scope, dev); }
-            else { println!("    inet6 {}/{} scope {}\n       valid_lft forever preferred_lft forever", a.addr, a.plen, a.scope); }
+            if a.fam == 4 { println!("    {} {} scope {} {}\n       valid_lft forever preferred_lft forever", p("34", "inet"), ip_c(4, &format!("{}/{}", a.addr, a.plen)), a.scope, p("32", dev)); }
+            else { println!("    {} {} scope {}\n       valid_lft forever preferred_lft forever", p("35", "inet6"), ip_c(6, &format!("{}/{}", a.addr, a.plen)), a.scope); }
         }
     }
     0
@@ -92,10 +102,10 @@ fn show_route(args: &[String], json: bool, fam: Option<u8>) -> i32 {
     }
     for r in rs {
         let dst = if r.dst == "default" { "default".to_string() } else if (r.fam == 4 && r.plen == 32) || (r.fam == 6 && r.plen == 128) { r.dst.clone() } else { format!("{}/{}", r.dst, r.plen) };
-        let mut s = dst;
-        if r.gw != "-" { s += &format!(" via {}", r.gw); }
-        s += &format!(" dev {}", r.dev);
-        if r.proto == "kernel" { s += &format!(" proto kernel scope link src {}", r.src); }
+        let mut s = if r.dst == "default" { p("1", &dst) } else { ip_c(r.fam, &dst) };
+        if r.gw != "-" { s += &format!(" via {}", ip_c(r.fam, &r.gw)); }
+        s += &format!(" dev {}", p("32", &r.dev));
+        if r.proto == "kernel" { s += &format!(" proto kernel scope link src {}", ip_c(r.fam, &r.src)); }
         println!("{s}");
     }
     0
@@ -128,6 +138,7 @@ fn is(a: &str, full: &str, min: usize) -> bool { a.len() >= min && full.starts_w
 
 pub fn main(args: &[String]) -> i32 {
     let (mut br, mut json, mut fam) = (false, false, None);
+    let mut color = std::io::stdout().is_terminal();
     let mut i = 0;
     while i < args.len() && args[i].starts_with('-') && args[i].len() > 1 {
         match args[i].as_str() {
@@ -135,12 +146,16 @@ pub fn main(args: &[String]) -> i32 {
             "-j" | "-json" => json = true,
             "-4" => fam = Some(4),
             "-6" => fam = Some(6),
-            "-o" | "-s" | "-c" | "-p" | "-d" | "-h" | "-human" | "-color" | "-oneline" | "-stats" => {}
+"-c" | "-color" | "-color=always" => color = true,
+            "-color=never" => color = false,
+            "-color=auto" => {}
+            "-o" | "-s" | "-p" | "-d" | "-h" | "-human" | "-color" | "-oneline" | "-stats" => {}
             "-V" | "-Version" => { println!("ip utility, MavexOS reimplementation (iproute2-compatible subset)"); return 0; }
             o => { eprintln!("Option \"{o}\" is unknown, try \"ip -help\"."); return 1; }
         }
         i += 1;
     }
+    COLOR.with(|c| c.set(color && !json));
     let rest = &args[i..];
     let Some(obj) = rest.first() else { eprintln!("Usage: ip [ OPTIONS ] OBJECT {{ COMMAND | help }}\nOBJECT := {{ link | address | route }}"); return 1 };
     let sub: Vec<String> = rest[1..].to_vec();

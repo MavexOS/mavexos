@@ -239,6 +239,13 @@
       setcreds: (u, g) => K.x.k_setcreds(pid, u, g),
       chmod(pp, pn, mode) { const [[a, al]] = packed(str(pp, pn)); return K.x.k_chmod_as(pid, a, al, mode); },
       chown(pp, pn, u, g) { const [[a, al]] = packed(str(pp, pn)); return K.x.k_chown_as(pid, a, al, u, g); },
+      sysinfo(out) {
+        const mem = Math.round(((performance.memory && performance.memory.usedJSHeapSize) || K.x.memory.buffer.byteLength) / 1048576);
+        const total = Math.max(mem, Math.round((navigator.deviceMemory || 4) * 1024));
+        const v = new Uint32Array(5);
+        v.set([Math.floor(performance.now() / 1000), total, mem, navigator.hardwareConcurrency || 1, 0]);
+        m8().set(new Uint8Array(v.buffer), out); return 0;
+      },
       statx(pp, pn, out) { const [[a, al]] = packed(str(pp, pn)); const r = K.x.k_statx(pid, a, al); if (r < 0) return r; m8().set(staged(r), out); return 0; },
       net(rp, rn, out, cap) {
         const [[a, al]] = packed(str(rp, rn));

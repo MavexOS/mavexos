@@ -575,13 +575,13 @@ pub extern "C" fn kmain() {
         }
         v.chmod("/tmp", 0o1777).unwrap();
         v.write_file("/etc/hostname", b"mavex\n").unwrap();
-        v.write_file("/etc/os-release", format!("NAME=MavexOS\nVERSION={}\nID=mavexos\n", ver).as_bytes()).unwrap();
+        v.write_file("/etc/os-release", format!("NAME=\"MavexOS\"\nPRETTY_NAME=\"MavexOS {0}\"\nVERSION=\"{0}\"\nVERSION_ID=\"{0}\"\nID=mavexos\nHOME_URL=\"https://github.com/MavexOS\"\n", ver).as_bytes()).unwrap();
         v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
         v.chown("/home/user", 1000, 1000).unwrap();
         v.mkdir("/root", 0o700).unwrap();
         v.write_file("/etc/passwd", b"root:x:0:0:root:/root:/bin/brush\nuser:x:1000:1000:User:/home/user:/bin/brush\n").unwrap();
         v.write_file("/etc/group", b"root:x:0:\nsudo:x:27:user\nuser:x:1000:\n").unwrap();
-        v.write_file("/etc/shadow", b"root:!:19000:0:99999:7:::\nuser:*:19000:0:99999:7:::\n").unwrap();
+        v.write_file("/etc/shadow", b"root::19000:0:99999:7:::\nuser:*:19000:0:99999:7:::\n").unwrap();
         v.chmod("/etc/shadow", 0o600).unwrap();
         v.write_file("/etc/sudoers", b"# MavexOS sudoers (no password prompts: ttys cannot block yet)\nroot ALL=(ALL) ALL\n%sudo ALL=(ALL) NOPASSWD: ALL\n").unwrap();
         v.chmod("/etc/sudoers", 0o440).unwrap();

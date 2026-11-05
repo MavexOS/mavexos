@@ -2,6 +2,7 @@
 //! `sudo`/`su` are MavexOS' own minimal implementations (not sudo-rs); `ip` is a reimplementation
 //! of an iproute2-compatible subset over the kernel's virtual netns (netlink-like requests).
 mod ip;
+mod sysutils;
 
 use std::process::exit;
 
@@ -71,7 +72,7 @@ fn groups_db() -> Vec<Group> {
         .collect()
 }
 
-fn user_name(uid: u32) -> String {
+pub fn user_name(uid: u32) -> String {
     users().into_iter().find(|u| u.uid == uid).map(|u| u.name).unwrap_or_else(|| uid.to_string())
 }
 
@@ -432,6 +433,14 @@ fn main() {
         "sudo" => cmd_sudo(&args),
         "su" => cmd_su(&args),
         "ip" => ip::main(&args),
+        "uname" => sysutils::uname(&args),
+        "hostname" => sysutils::hostname(&args),
+        "clear" => sysutils::clear(),
+        "uptime" => sysutils::uptime(&args),
+        "free" => sysutils::free(&args),
+        "nproc" => sysutils::nproc(),
+        "which" => sysutils::which(&args),
+        "neofetch" | "fastfetch" => sysutils::neofetch(&args),
         _ => { eprintln!("mavexutils: unknown applet '{name}'"); 127 }
     };
     exit(rc);
