@@ -1,5 +1,5 @@
 [workspace]
-members = ["coreutils", "probe"]
+members = ["coreutils", "probe", "brush"]
 resolver = "2"
 
 [profile.release]
@@ -8,3 +8,6 @@ lto = true
 panic = "abort"
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+brush-core = { path = "vendor/brush-core" }
