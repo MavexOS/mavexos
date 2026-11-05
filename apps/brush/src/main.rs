@@ -1,1 +1,101 @@
-fn main() {}
+use std::cell::RefCell;
+
+use brush_builtins::{BuiltinSet, ShellBuilderExt};
+use brush_core::{Shell, extensions::DefaultShellExtensions};
+
+#[link(wasm_import_module = "mavex")]
+unsafe extern "C" {
+    fn park();
+}
+
+thread_local! {
+    static RT: RefCell<Option<tokio::runtime::Runtime>> = const { RefCell::new(None) };
+    static SH: RefCell<Option<Shell<DefaultShellExtensions>>> = const { RefCell::new(None) };
+    static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+fn block<T>(f: impl std::future::Future<Output = T>) -> T {
+    RT.with(|r| r.borrow().as_ref().unwrap().block_on(f))
+}
+
+fn main() {
+    let rt = tokio::runtime::Builder::new_current_thread().build().expect("rt");
+    RT.with(|r| *r.borrow_mut() = Some(rt));
+    let shell = block(async {
+        Shell::builder()
+            .default_builtins(BuiltinSet::BashMode)
+            .interactive(true)
+            .profile(brush_core::ProfileLoadBehavior::Skip)
+            .rc(brush_core::RcLoadBehavior::Skip)
+            .shell_name("brush".to_string())
+            .build()
+            .await
+    });
+    match shell {
+        Ok(s) => SH.with(|c| *c.borrow_mut() = Some(s)),
+        Err(e) => {
+            eprintln!("brush: init failed: {e}");
+            std::process::exit(1);
+        }
+    }
+    unsafe { park() };
+}
+
+fn take_out(bytes: Vec<u8>) -> i32 {
+    OUT.with(|o| *o.borrow_mut() = bytes);
+    OUT.with(|o| o.borrow().as_ptr() as i32)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn brush_alloc(n: i32) -> i32 {
+    let mut v = Vec::<u8>::with_capacity(n as usize);
+    let p = v.as_mut_ptr();
+    std::mem::forget(v);
+    p as i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn brush_out_len() -> i32 {
+    OUT.with(|o| o.borrow().len() as i32)
+}
+
+/// Runs one line; returns exit status, or -1000-N if the shell asked to exit with N.
+#[unsafe(no_mangle)]
+pub extern "C" fn brush_run(ptr: i32, len: i32) -> i32 {
+    let line = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr as *const u8, len as usize)).into_owned() };
+    SH.with(|c| {
+        let mut g = c.borrow_mut();
+        let sh = g.as_mut().unwrap();
+        let params = sh.default_exec_params();
+        let r = block(sh.run_string(line, &brush_core::SourceInfo::from("<tty>"), &params));
+        match r {
+            Ok(res) => {
+                let code: u8 = res.exit_code.into();
+                if matches!(res.next_control_flow, brush_core::ExecutionControlFlow::ExitShell) {
+                    -1000 - code as i32
+                } else {
+                    code as i32
+                }
+            }
+            Err(e) => {
+                eprintln!("brush: {e}");
+                1
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn brush_prompt() -> i32 {
+    let s = SH.with(|c| {
+        let mut g = c.borrow_mut();
+        block(g.as_mut().unwrap().compose_prompt()).unwrap_or_else(|_| "$ ".into())
+    });
+    take_out(s.into_bytes())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn brush_cwd() -> i32 {
+    let s = SH.with(|c| c.borrow().as_ref().unwrap().working_dir().to_string_lossy().into_owned());
+    take_out(s.into_bytes())
+}
