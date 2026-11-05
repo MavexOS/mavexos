@@ -1,10 +1,13 @@
-use mavex_vfs::{Errno, Vfs};
-use mavex_shell::Shell;
+use mavex_shell::{ExecReq, ExecRes, Host, Shell};
+use mavex_sys::{errno, Stdio, Sys};
+use mavex_vfs::{Errno, Kind, Vfs};
 use std::cell::RefCell;
 
 #[link(wasm_import_module = "host")]
 extern "C" {
     fn console_write(ptr: *const u8, len: usize);
+    fn run_process(pid: u32);
+    fn now_ns() -> f64;
 }
 
 fn print(s: &str) {
@@ -12,9 +15,17 @@ fn print(s: &str) {
 }
 
 thread_local! {
-    static VFS: RefCell<Vfs> = RefCell::new(Vfs::new());
+    static SYS: RefCell<Sys> = RefCell::new(Sys::new(Vfs::new()));
     static SHELL: RefCell<Shell> = RefCell::new(Shell::new());
     static RESULT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+fn with_sys<R>(f: impl FnOnce(&mut Sys) -> R) -> R {
+    SYS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.vfs.set_time(unsafe { now_ns() } as u64);
+        f(&mut s)
+    })
 }
 
 fn errno_code(e: Errno) -> i32 {
@@ -40,6 +51,32 @@ fn ret(r: Result<(), Errno>) -> i32 {
     }
 }
 
+fn stage(d: Vec<u8>) -> i32 {
+    let len = d.len() as i32;
+    RESULT.with(|r| *r.borrow_mut() = d);
+    len
+}
+
+fn wr<T>(r: Result<T, u16>, f: impl FnOnce(T) -> i32) -> i32 {
+    match r {
+        Ok(v) => f(v),
+        Err(e) => -(e as i32),
+    }
+}
+
+fn nul_list(s: &str) -> Vec<String> {
+    s.split('\0').filter(|x| !x.is_empty()).map(String::from).collect()
+}
+
+fn join_nul(v: &[String]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for s in v {
+        out.extend_from_slice(s.as_bytes());
+        out.push(0);
+    }
+    out
+}
+
 #[no_mangle]
 pub extern "C" fn k_alloc(len: usize) -> *mut u8 {
     let mut v = Vec::<u8>::with_capacity(len);
@@ -54,68 +91,334 @@ pub unsafe extern "C" fn k_free(ptr: *mut u8, len: usize) {
 }
 
 #[no_mangle]
+pub extern "C" fn k_result_ptr() -> *const u8 {
+    RESULT.with(|r| r.borrow().as_ptr())
+}
+
+// ---- host-facing filesystem helpers ----
+#[no_mangle]
 pub unsafe extern "C" fn k_mkdir(p: *const u8, n: usize) -> i32 {
     let path = str_arg(p, n);
-    VFS.with(|v| ret(v.borrow_mut().mkdir(path, 0o755)))
+    with_sys(|s| ret(s.vfs.mkdir(path, 0o755)))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn k_write_file(p: *const u8, n: usize, d: *const u8, dn: usize) -> i32 {
     let path = str_arg(p, n);
     let data = std::slice::from_raw_parts(d, dn);
-    VFS.with(|v| ret(v.borrow_mut().write_file(path, data)))
+    with_sys(|s| ret(s.vfs.write_file(path, data)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_symlink(t: *const u8, tn: usize, p: *const u8, n: usize) -> i32 {
+    let (target, path) = (str_arg(t, tn), str_arg(p, n));
+    with_sys(|s| ret(s.vfs.symlink(target, path)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_chmod(p: *const u8, n: usize, mode: u32) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| ret(s.vfs.chmod(path, mode)))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn k_unlink(p: *const u8, n: usize) -> i32 {
     let path = str_arg(p, n);
-    VFS.with(|v| ret(v.borrow_mut().unlink(path)))
+    with_sys(|s| ret(s.vfs.unlink(path)))
 }
 
-/// Stages the file's bytes in the result buffer; returns the length or -errno.
 #[no_mangle]
 pub unsafe extern "C" fn k_read_file(p: *const u8, n: usize) -> i32 {
     let path = str_arg(p, n);
-    match VFS.with(|v| v.borrow().read_file(path)) {
-        Ok(d) => {
-            let len = d.len() as i32;
-            RESULT.with(|r| *r.borrow_mut() = d);
-            len
-        }
+    match with_sys(|s| s.vfs.read_file(path)) {
+        Ok(d) => stage(d),
         Err(e) => errno_code(e),
     }
 }
 
-/// Stages newline-separated entry names; returns the length or -errno.
 #[no_mangle]
 pub unsafe extern "C" fn k_readdir(p: *const u8, n: usize) -> i32 {
     let path = str_arg(p, n);
-    match VFS.with(|v| v.borrow().readdir(path)) {
-        Ok(names) => {
-            let d = names.join("\n").into_bytes();
-            let len = d.len() as i32;
-            RESULT.with(|r| *r.borrow_mut() = d);
-            len
-        }
+    match with_sys(|s| s.vfs.readdir(path)) {
+        Ok(names) => stage(names.join("\n").into_bytes()),
         Err(e) => errno_code(e),
     }
 }
 
-#[no_mangle]
-pub extern "C" fn k_result_ptr() -> *const u8 {
-    RESULT.with(|r| r.borrow().as_ptr())
+// ---- processes ----
+fn stdio_arg(v: i32) -> Stdio {
+    match v {
+        n if n >= 0 => Stdio::Fd(n as u32),
+        -2 => Stdio::Null,
+        _ => Stdio::Tty,
+    }
 }
 
-fn stage(d: Vec<u8>) -> i32 {
-    let len = d.len() as i32;
-    RESULT.with(|r| *r.borrow_mut() = d);
-    len
+/// stdio args: >=0 duplicates that fd of the parent, -1 = terminal, -2 = null.
+#[no_mangle]
+pub unsafe extern "C" fn k_spawn(
+    ppid: u32, exe_p: *const u8, exe_n: usize, argv_p: *const u8, argv_n: usize, env_p: *const u8, env_n: usize,
+    cwd_p: *const u8, cwd_n: usize, s0: i32, s1: i32, s2: i32,
+) -> i32 {
+    let name = str_arg(exe_p, exe_n);
+    let argv = nul_list(str_arg(argv_p, argv_n));
+    let env_given = nul_list(str_arg(env_p, env_n));
+    let cwd_given = str_arg(cwd_p, cwd_n).to_string();
+    with_sys(|s| {
+        let env = if env_n == 0 { s.proc_env(ppid).unwrap_or_default() } else { env_given };
+        let cwd = if cwd_n == 0 { s.proc_cwd(ppid).unwrap_or_else(|| "/".into()) } else { cwd_given };
+        let path = env.iter().find_map(|e| e.strip_prefix("PATH=")).unwrap_or("/bin").to_string();
+        let exe = match s.which(name, &path, &cwd) {
+            Some(e) => e,
+            None => return -(errno::NOENT as i32),
+        };
+        let argv = if argv.is_empty() { vec![name.to_string()] } else { argv };
+        wr(s.spawn(ppid, exe, argv, env, cwd, [stdio_arg(s0), stdio_arg(s1), stdio_arg(s2)]), |p| p as i32)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_exit(pid: u32, code: i32) {
+    with_sys(|s| s.exit(pid, code));
+}
+
+#[no_mangle]
+pub extern "C" fn k_wait(pid: u32) -> i32 {
+    with_sys(|s| wr(s.wait(pid), |c| c))
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_image(pid: u32) -> i32 {
+    match with_sys(|s| s.proc_exe(pid).and_then(|e| s.vfs.read_file(&e).map_err(|_| errno::NOENT))) {
+        Ok(d) => stage(d),
+        Err(e) => -(e as i32),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_args(pid: u32) -> i32 {
+    with_sys(|s| wr(s.proc_args(pid), |a| stage(join_nul(&a))))
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_env(pid: u32) -> i32 {
+    with_sys(|s| wr(s.proc_env(pid), |a| stage(join_nul(&a))))
+}
+
+#[no_mangle]
+pub extern "C" fn k_pipe(pid: u32) -> i32 {
+    with_sys(|s| wr(s.create_pipe(pid), |(r, w)| ((w << 16) | r) as i32))
+}
+
+// ---- fd and path operations (WASI-shaped) ----
+#[no_mangle]
+pub extern "C" fn k_fd_close(pid: u32, fd: u32) -> i32 {
+    with_sys(|s| wr(s.fd_close(pid, fd), |_| 0))
+}
+
+#[no_mangle]
+pub extern "C" fn k_fd_read(pid: u32, fd: u32, len: usize) -> i32 {
+    with_sys(|s| wr(s.fd_read(pid, fd, len), stage))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_fd_write(pid: u32, fd: u32, p: *const u8, n: usize) -> i32 {
+    let data = std::slice::from_raw_parts(p, n);
+    with_sys(|s| wr(s.fd_write(pid, fd, data), |n| n as i32))
+}
+
+#[no_mangle]
+pub extern "C" fn k_fd_pread(pid: u32, fd: u32, len: usize, off: f64) -> i32 {
+    with_sys(|s| wr(s.fd_pread(pid, fd, len, off as u64), stage))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_fd_pwrite(pid: u32, fd: u32, p: *const u8, n: usize, off: f64) -> i32 {
+    let data = std::slice::from_raw_parts(p, n);
+    with_sys(|s| wr(s.fd_pwrite(pid, fd, data, off as u64), |n| n as i32))
+}
+
+/// Returns the new offset, or a negative errno.
+#[no_mangle]
+pub extern "C" fn k_fd_seek(pid: u32, fd: u32, delta: f64, whence: u32) -> f64 {
+    match with_sys(|s| s.fd_seek(pid, fd, delta as i64, whence as u8)) {
+        Ok(o) => o as f64,
+        Err(e) => -(e as f64),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn k_fd_set_size(pid: u32, fd: u32, len: f64) -> i32 {
+    with_sys(|s| wr(s.fd_set_size(pid, fd, len as u64), |_| 0))
+}
+
+fn filestat_bytes(st: mavex_vfs::Stat) -> Vec<u8> {
+    let mut b = Vec::with_capacity(64);
+    b.extend_from_slice(&0u64.to_le_bytes());
+    b.extend_from_slice(&(st.ino as u64).to_le_bytes());
+    let ft = match st.kind {
+        Kind::File => 4u8,
+        Kind::Dir => 3,
+        Kind::Symlink => 7,
+    };
+    b.push(ft);
+    b.extend_from_slice(&[0u8; 7]);
+    b.extend_from_slice(&1u64.to_le_bytes());
+    b.extend_from_slice(&st.size.to_le_bytes());
+    for _ in 0..3 {
+        b.extend_from_slice(&st.mtime.to_le_bytes());
+    }
+    b
+}
+
+#[no_mangle]
+pub extern "C" fn k_fd_filestat(pid: u32, fd: u32) -> i32 {
+    with_sys(|s| wr(s.fd_stat(pid, fd), |st| stage(filestat_bytes(st))))
+}
+
+/// Returns filetype | (append << 8) or a negative errno.
+#[no_mangle]
+pub extern "C" fn k_fd_fdstat(pid: u32, fd: u32) -> i32 {
+    with_sys(|s| wr(s.fd_type(pid, fd), |(t, a)| t as i32 | ((a as i32) << 8)))
+}
+
+#[no_mangle]
+pub extern "C" fn k_fd_prestat(pid: u32, fd: u32) -> i32 {
+    with_sys(|s| wr(s.fd_prestat(pid, fd), |n| stage(n.into_bytes())))
+}
+
+/// Stages WASI dirent records starting at `cookie` (an entry index); returns the byte count.
+#[no_mangle]
+pub extern "C" fn k_fd_readdir(pid: u32, fd: u32, cookie: f64, bufsize: usize) -> i32 {
+    with_sys(|s| {
+        wr(s.fd_readdir(pid, fd), |ents| {
+            let mut out = Vec::new();
+            for (i, e) in ents.iter().enumerate().skip(cookie as usize) {
+                if out.len() >= bufsize {
+                    break;
+                }
+                out.extend_from_slice(&((i + 1) as u64).to_le_bytes());
+                out.extend_from_slice(&e.ino.to_le_bytes());
+                out.extend_from_slice(&(e.name.len() as u32).to_le_bytes());
+                out.push(e.ftype);
+                out.extend_from_slice(&[0u8; 3]);
+                out.extend_from_slice(e.name.as_bytes());
+            }
+            out.truncate(bufsize);
+            stage(out)
+        })
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_open(pid: u32, dirfd: u32, p: *const u8, n: usize, oflags: u32, fdflags: u32, read: u32, write: u32) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| {
+        wr(
+            s.path_open(pid, dirfd, path, oflags & 1 != 0, oflags & 2 != 0, oflags & 4 != 0, oflags & 8 != 0, fdflags & 1 != 0, read != 0, write != 0),
+            |fd| fd as i32,
+        )
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_mkdir(pid: u32, dirfd: u32, p: *const u8, n: usize) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| wr(s.path_mkdir(pid, dirfd, path), |_| 0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_rmdir(pid: u32, dirfd: u32, p: *const u8, n: usize) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| wr(s.path_rmdir(pid, dirfd, path), |_| 0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_unlink(pid: u32, dirfd: u32, p: *const u8, n: usize) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| wr(s.path_unlink(pid, dirfd, path), |_| 0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_rename(pid: u32, d1: u32, p1: *const u8, n1: usize, d2: u32, p2: *const u8, n2: usize) -> i32 {
+    let (a, b) = (str_arg(p1, n1), str_arg(p2, n2));
+    with_sys(|s| wr(s.path_rename(pid, d1, a, d2, b), |_| 0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_symlink(pid: u32, t: *const u8, tn: usize, dirfd: u32, p: *const u8, n: usize) -> i32 {
+    let (target, path) = (str_arg(t, tn), str_arg(p, n));
+    with_sys(|s| wr(s.path_symlink(pid, target, dirfd, path), |_| 0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_readlink(pid: u32, dirfd: u32, p: *const u8, n: usize) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| wr(s.path_readlink(pid, dirfd, path), |t| stage(t.into_bytes())))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_path_filestat(pid: u32, dirfd: u32, p: *const u8, n: usize, follow: u32) -> i32 {
+    let path = str_arg(p, n);
+    with_sys(|s| wr(s.path_stat(pid, dirfd, path, follow != 0), |st| stage(filestat_bytes(st))))
+}
+
+// ---- shell ----
+struct KHost;
+
+impl Host for KHost {
+    fn with_vfs(&self, f: &mut dyn FnMut(&mut Vfs)) {
+        with_sys(|s| f(&mut s.vfs));
+    }
+
+    fn find_exe(&self, name: &str, path: &str, cwd: &str) -> Option<String> {
+        with_sys(|s| s.which(name, path, cwd))
+    }
+
+    fn exec(&self, req: &ExecReq) -> Option<ExecRes> {
+        let path = req.env.get("PATH").cloned().unwrap_or_default();
+        let env: Vec<String> = req.env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let (pid, out_pipe) = with_sys(|s| {
+            let exe = s.which(&req.argv[0], &path, req.cwd)?;
+            s.tty_out.clear();
+            let stdin = match req.stdin {
+                Some(t) => {
+                    let id = s.new_pipe();
+                    s.pipe_fill(id, t.as_bytes());
+                    Stdio::PipeR(id)
+                }
+                None => Stdio::Tty,
+            };
+            let (stdout, out_pipe) = if req.tty {
+                (Stdio::Tty, None)
+            } else {
+                let id = s.new_pipe();
+                s.pipe_host_reader(id);
+                (Stdio::PipeW(id), Some(id))
+            };
+            let pid = s.spawn(0, exe, req.argv.to_vec(), env, req.cwd.to_string(), [stdin, stdout, Stdio::Tty]).ok()?;
+            Some((pid, out_pipe))
+        })?;
+        unsafe { run_process(pid) };
+        Some(with_sys(|s| {
+            let code = s.wait(pid).unwrap_or(255);
+            let tty = String::from_utf8_lossy(&std::mem::take(&mut s.tty_out)).into_owned();
+            match out_pipe {
+                Some(id) => {
+                    let out = String::from_utf8_lossy(&s.pipe_drain(id)).into_owned();
+                    s.pipe_release(id);
+                    ExecRes { out, err: tty, code }
+                }
+                None => ExecRes { out: tty, err: String::new(), code },
+            }
+        }))
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn k_shell_run(p: *const u8, n: usize) -> i32 {
     let line = str_arg(p, n);
-    let out = VFS.with(|v| SHELL.with(|s| s.borrow_mut().run_line(&mut v.borrow_mut(), line)));
+    let out = SHELL.with(|s| s.borrow_mut().run_line(&KHost, line));
     stage(out.into_bytes())
 }
 
@@ -124,11 +427,10 @@ pub extern "C" fn k_shell_prompt() -> i32 {
     stage(SHELL.with(|s| s.borrow().prompt()).into_bytes())
 }
 
-/// Stages newline-separated completion candidates for `word`.
 #[no_mangle]
 pub unsafe extern "C" fn k_shell_complete(p: *const u8, n: usize, is_first: i32) -> i32 {
     let word = str_arg(p, n);
-    let c = VFS.with(|v| SHELL.with(|s| s.borrow().complete(&v.borrow(), word, is_first != 0)));
+    let c = with_sys(|sys| SHELL.with(|s| s.borrow().complete(&sys.vfs, word, is_first != 0)));
     stage(c.join("\n").into_bytes())
 }
 
@@ -139,7 +441,16 @@ pub extern "C" fn k_shell_exited() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn k_shell_reset() {
-    SHELL.with(|s| *s.borrow_mut() = Shell::new());
+    SHELL.with(|s| {
+        let cols = s.borrow().cols;
+        *s.borrow_mut() = Shell::new();
+        s.borrow_mut().cols = cols;
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn k_tty_resize(cols: u32) {
+    SHELL.with(|s| s.borrow_mut().cols = cols.clamp(20, 500));
 }
 
 #[no_mangle]
@@ -148,8 +459,8 @@ pub extern "C" fn kmain() {
     print(&format!("MavexOS {} (wasm32) - kernel starting\n", ver));
     print("[ ok ] first boot on this device: no saved state found\n");
     print("[ ok ] memory: wasm linear memory, RAM-only (nothing persists yet)\n");
-    VFS.with(|v| {
-        let mut v = v.borrow_mut();
+    with_sys(|s| {
+        let v = &mut s.vfs;
         for d in ["/bin", "/etc", "/home", "/home/user", "/tmp", "/usr"] {
             v.mkdir(d, 0o755).unwrap();
         }
@@ -157,15 +468,10 @@ pub extern "C" fn kmain() {
         v.write_file("/etc/hostname", b"mavex\n").unwrap();
         v.write_file("/etc/os-release", format!("NAME=MavexOS\nVERSION={}\nID=mavexos\n", ver).as_bytes()).unwrap();
         v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
-        v.write_file("/bin/msh", b"").unwrap();
-        v.chmod("/bin/msh", 0o755).unwrap();
-        for c in mavex_shell::COMMANDS {
-            let _ = v.symlink("/bin/msh", &format!("/bin/{}", c));
-        }
         v.chown("/home/user", 1000, 1000).unwrap();
         v.set_creds(1000, 1000);
     });
     print("[ ok ] vfs: in-memory root filesystem mounted at /\n");
+    print("[ ok ] process layer: pid table, fds, pipes, tty ready\n");
     print("[ ok ] created /home/user (uid 1000)\n");
-    print("[ ok ] started /bin/msh\n");
 }

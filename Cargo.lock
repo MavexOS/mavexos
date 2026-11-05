@@ -4,15 +4,16 @@ version = 4
 
 [[package]]
 name = "mavex-kernel"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "mavex-shell",
+ "mavex-sys",
  "mavex-vfs",
 ]
 
 [[package]]
 name = "mavex-shell"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "mavex-vfs",
 ]

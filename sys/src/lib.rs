@@ -130,6 +130,10 @@ impl Sys {
         Ok(self.proc(pid)?.env.clone())
     }
 
+    pub fn proc_cwd(&self, pid: u32) -> Option<String> {
+        self.procs.get(&pid).map(|p| p.cwd.clone())
+    }
+
     pub fn proc_count(&self) -> usize {
         self.procs.len()
     }
