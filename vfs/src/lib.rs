@@ -48,6 +48,7 @@ struct Node {
 pub struct Vfs {
     nodes: Vec<Option<Node>>,
     free: Vec<Ino>,
+    cred: (u32, u32),
 }
 
 const ROOT: Ino = 0;
@@ -62,7 +63,7 @@ impl Default for Vfs {
 impl Vfs {
     pub fn new() -> Self {
         let root = Node { data: Data::Dir(BTreeMap::new()), mode: 0o755, uid: 0, gid: 0 };
-        Vfs { nodes: vec![Some(root)], free: Vec::new() }
+        Vfs { nodes: vec![Some(root)], free: Vec::new(), cred: (0, 0) }
     }
 
     fn alloc(&mut self, node: Node) -> Ino {
@@ -188,15 +189,33 @@ impl Vfs {
         Ok(ino)
     }
 
+    pub fn set_creds(&mut self, uid: u32, gid: u32) {
+        self.cred = (uid, gid);
+    }
+
+    pub fn chown(&mut self, path: &str, uid: u32, gid: u32) -> Result<()> {
+        let ino = self.walk(path, true, 0)?;
+        let n = self.node_mut(ino);
+        n.uid = uid;
+        n.gid = gid;
+        Ok(())
+    }
+
+    pub fn chmod(&mut self, path: &str, mode: u32) -> Result<()> {
+        let ino = self.walk(path, true, 0)?;
+        self.node_mut(ino).mode = mode & 0o7777;
+        Ok(())
+    }
+
     pub fn mkdir(&mut self, path: &str, mode: u32) -> Result<()> {
         let (p, name) = self.parent_and_name(path)?;
-        self.insert(p, name, Node { data: Data::Dir(BTreeMap::new()), mode, uid: 0, gid: 0 })?;
+        self.insert(p, name, Node { data: Data::Dir(BTreeMap::new()), mode, uid: self.cred.0, gid: self.cred.1 })?;
         Ok(())
     }
 
     pub fn symlink(&mut self, target: &str, path: &str) -> Result<()> {
         let (p, name) = self.parent_and_name(path)?;
-        self.insert(p, name, Node { data: Data::Symlink(target.to_string()), mode: 0o777, uid: 0, gid: 0 })?;
+        self.insert(p, name, Node { data: Data::Symlink(target.to_string()), mode: 0o777, uid: self.cred.0, gid: self.cred.1 })?;
         Ok(())
     }
 
@@ -220,7 +239,7 @@ impl Vfs {
             },
             Err(Errno::NoEnt) => {
                 let (p, name) = self.parent_and_name(path)?;
-                self.insert(p, name, Node { data: Data::File(data.to_vec()), mode: 0o644, uid: 0, gid: 0 })?;
+                self.insert(p, name, Node { data: Data::File(data.to_vec()), mode: 0o644, uid: self.cred.0, gid: self.cred.1 })?;
                 Ok(())
             }
             Err(e) => Err(e),
@@ -394,6 +413,19 @@ mod tests {
         assert!(v.stat("/a/b/../b/.").is_ok());
         assert!(v.stat("/../../a").is_ok());
         assert_eq!(v.stat("a").map(|_| ()), Err(Errno::Inval));
+    }
+
+    #[test]
+    fn creds_chown_chmod() {
+        let mut v = Vfs::new();
+        v.set_creds(1000, 1000);
+        v.write_file("/f", b"x").unwrap();
+        let st = v.stat("/f").unwrap();
+        assert_eq!((st.uid, st.gid), (1000, 1000));
+        v.chown("/f", 0, 5).unwrap();
+        v.chmod("/f", 0o100755).unwrap();
+        let st = v.stat("/f").unwrap();
+        assert_eq!((st.uid, st.gid, st.mode), (0, 5, 0o755));
     }
 
     #[test]
