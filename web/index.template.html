@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MavexOS</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0e14;color:#c8d3e0}
+  #term{box-sizing:border-box;height:100%;padding:12px;margin:0;overflow:auto;
+        font:14px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<pre id="term"></pre>
+<script>
+const KERNEL_WASM_B64 = "__KERNEL_WASM_BASE64__";
+const term = document.getElementById("term");
+const bytes = Uint8Array.from(atob(KERNEL_WASM_B64), c => c.charCodeAt(0));
+let mem;
+const imports = { host: {
+  console_write(ptr, len) {
+    term.textContent += new TextDecoder().decode(new Uint8Array(mem.buffer, ptr, len));
+  }
+}};
+WebAssembly.instantiate(bytes, imports).then(({instance}) => {
+  mem = instance.exports.memory;
+  instance.exports.kmain();
+});
+</script>
+</body>
+</html>
