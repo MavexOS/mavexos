@@ -1,4 +1,4 @@
-//! uname, hostname, clear, uptime, free, nproc, which, neofetch.
+//! uname, hostname, clear, uptime, free, nproc, which.
 use std::io::IsTerminal;
 
 #[link(wasm_import_module = "mavex")]
@@ -126,47 +126,4 @@ pub fn which(args: &[String]) -> i32 {
         match found { Some(p) => println!("{p}"), None => rc = 1 }
     }
     rc
-}
-
-pub fn neofetch(args: &[String]) -> i32 {
-    let color = !args.iter().any(|a| a == "--off" || a == "--stdout") && (std::io::stdout().is_terminal() || args.iter().any(|a| a == "--color"));
-    let c = |code: &str, s: &str| if color { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() };
-    let i = info();
-    let (user, host) = (crate::user_name(crate::creds().2), hostname_str());
-    let os = os_release("PRETTY_NAME").unwrap_or_else(|| format!("{} {}", KERNEL_NAME, KERNEL_RELEASE));
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/brush".into());
-    let pkgs = std::fs::read_dir("/bin").map(|d| d.count()).unwrap_or(0);
-    let title = format!("{}@{}", c("1;36", &user), c("1;36", &host));
-    let rows: Vec<(String, String)> = vec![
-        (title, String::new()),
-        (c("36", &"-".repeat(user.len() + host.len() + 1)), String::new()),
-        (c("1;36", "OS"), format!("{os} {MACHINE}")),
-        (c("1;36", "Host"), "Browser tab (wasm sandbox)".into()),
-        (c("1;36", "Kernel"), format!("{KERNEL_NAME} {KERNEL_RELEASE}")),
-        (c("1;36", "Uptime"), fmt_dur(i.uptime)),
-        (c("1;36", "Packages"), format!("{pkgs} (bin)")),
-        (c("1;36", "Shell"), shell.rsplit('/').next().unwrap_or(&shell).to_string()),
-        (c("1;36", "Terminal"), "mavex tty1".into()),
-        (c("1;36", "CPU"), format!("wasm32 virtual ({})", i.cpus)),
-        (c("1;36", "Memory"), format!("{}MiB / {}MiB", i.mem_used_mib, i.mem_total_mib)),
-        (String::new(), String::new()),
-        ((30..38).map(|n| c(&format!("4{}", n - 30), "   ")).collect::<String>(), String::new()),
-        ((90..98).map(|n| c(&format!("10{}", n - 90), "   ")).collect::<String>(), String::new()),
-    ];
-    let logo = [
-        "      .--.      ",
-        "     /    \\     ",
-        "    | ^  ^ |    ",
-        "    |  ()  |    ",
-        "   /| M  X |\\   ",
-        "  / |______| \\  ",
-        " /__/  /\\  \\__\\ ",
-        "      /__\\      ",
-    ];
-    for (n, (k, v)) in rows.iter().enumerate() {
-        let l = logo.get(n).copied().unwrap_or("                ");
-        let line = if v.is_empty() { k.clone() } else { format!("{}: {}", k, v) };
-        println!("{} {}", c("1;36", l), line);
-    }
-    0
 }

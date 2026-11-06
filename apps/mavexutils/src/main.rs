@@ -440,7 +440,6 @@ fn main() {
         "free" => sysutils::free(&args),
         "nproc" => sysutils::nproc(),
         "which" => sysutils::which(&args),
-        "neofetch" | "fastfetch" => sysutils::neofetch(&args),
         _ => { eprintln!("mavexutils: unknown applet '{name}'"); 127 }
     };
     exit(rc);

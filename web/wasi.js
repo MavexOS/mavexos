@@ -138,7 +138,7 @@
         if (r < 0) return -r;
         dv().setBigUint64(out, BigInt(r), true); return 0;
       },
-      fd_tell(fd, out) { return this.fd_seek(fd, 0n, 1, out); },
+      fd_tell(fd, out) { const r = x.k_fd_seek(pid, fd, 0, 1); if (r < 0) return -r; dv().setBigUint64(out, BigInt(r), true); return 0; },
       fd_sync() { return 0; }, fd_datasync() { return 0; }, fd_advise() { return 0; }, fd_allocate() { return 0; },
       fd_fdstat_get(fd, out) {
         const r = x.k_fd_fdstat(pid, fd);

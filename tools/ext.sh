@@ -17,3 +17,4 @@ build() { # name repo ref binname [patch]
   cp "$dir/target/wasm32-wasip1/release/$bin.wasm" ".scratch/ext/$name.wasm"
 }
 build rg BurntSushi/ripgrep 14.1.1 rg ripgrep-wasi.patch
+build crabfetch LivacoNew/CrabFetch 187b0b2fc6bc6c8460deb8c7bfb240bd87ae3b60 crab-fetch crabfetch-wasi.patch

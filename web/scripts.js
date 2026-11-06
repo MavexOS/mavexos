@@ -182,14 +182,16 @@ async function boot() {
   const brushMod = R.registerModule("brush", window.MAVEX_BRUSH_B64);
   const mxu = R.registerModule("mavexutils", window.MAVEX_MAVEXUTILS_B64);
   const rgMod = R.registerModule("rg", window.MAVEX_EXT_RG_B64);
+  const cfMod = R.registerModule("crabfetch", window.MAVEX_EXT_CRABFETCH_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
   if (!FAST) await sleep(350);
-  await coreutils; await brushMod; await mxu; await rgMod;
+  await coreutils; await brushMod; await mxu; await rgMod; await cfMod;
   K.kmain();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "neofetch", "fastfetch"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which"]);
   R.install("rg", []);
+  R.install("crabfetch", ["crab-fetch"]);
   R.installSetuid("mavexutils", ["sudo", "su"]);
   if (useBrush) startLogin();
   fitCols();

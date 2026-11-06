@@ -1,0 +1,857 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index a889ca3..48968a7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,8 +24,6 @@ config = "0.14.0"
+ serde = "1.0.197"
+ libc = "0.2.153"
+ humantime = "2.1.0"
+-wayland-client = "0.31.3"
+-x11rb = { version = "0.13.1", features = ["randr"] }
+ dbus = { version = "0.9.7", optional = true }
+ chrono = { version = "0.4.38", features = ["alloc", "android-tzdata", "clock", "iana-time-zone", "now", "std"] }
+ android_system_properties = { version = "0.1.5", optional = true }
+@@ -34,4 +32,8 @@ which = "6.0.1"
+ sha2 = "0.10.8"
+ hex = "0.4.3"
+ strip-ansi-escapes = "0.2.0"
++
++[target.'cfg(target_arch = "x86_64")'.dependencies]
+ raw-cpuid = "11.1.0"
++
++[workspace]
+diff --git a/src/common_sources/syscalls.rs b/src/common_sources/syscalls.rs
+index ffa0878..edcddf9 100644
+--- a/src/common_sources/syscalls.rs
++++ b/src/common_sources/syscalls.rs
+@@ -1,101 +1,74 @@
+-// Handles and caches all syscalls used between module
+-// This is to prevent duplicate work being done as well as leaving most of our
+-// unsafe options in a single place
++// MavexOS/wasi port: syscall data is read from /proc and /etc instead of libc.
++use std::fs;
+ 
+-use crate::util;
+-use libc::{geteuid, getpwuid};
+-use std::mem;
++#[derive(Clone, Copy)]
++pub struct SysInfo {
++    pub uptime: i64,
++    pub totalswap: u64,
++    pub freeswap: u64,
++    pub mem_unit: u32,
++}
+ 
+ pub struct SyscallCache {
+-    // https://man7.org/linux/man-pages/man2/sysinfo.2.html
+-    sysinfo: Option<libc::sysinfo>,
+-    uname: Option<libc::utsname>,
+     euid: Option<u32>,
+-    passwd: Option<libc::passwd>,
+ }
+ impl SyscallCache {
+     pub fn new() -> Self {
+-        Self {
+-            sysinfo: None,
+-            uname: None,
+-            euid: None,
+-            passwd: None,
+-        }
+-    }
+-
+-    // Cache our syscalls
+-    fn cache_sysinfo(&mut self) {
+-        let mut sysinfo_buffer: libc::sysinfo;
+-        unsafe {
+-            sysinfo_buffer = mem::zeroed();
+-            libc::sysinfo(&mut sysinfo_buffer);
+-        }
+-        self.sysinfo = Some(sysinfo_buffer);
+-    }
+-    fn cache_uname(&mut self) {
+-        let mut uname_buffer: libc::utsname;
+-        unsafe {
+-            uname_buffer = mem::zeroed();
+-            libc::uname(&mut uname_buffer);
+-        }
+-        self.uname = Some(uname_buffer);
+-    }
+-    fn cache_euid(&mut self) {
+-        unsafe {
+-            self.euid = Some(geteuid());
+-        }
+-    }
+-    fn cache_passwd(&mut self) {
+-        let passwd_buffer: libc::passwd;
+-        unsafe {
+-            let user_id: u32 = self.get_euid_cached();
+-            let buffer_ptr: *mut libc::passwd = getpwuid(user_id);
+-            // Null pointer, this is a crash as we have no error handling for
+-            // the time being TODO: Handle this properly
+-            assert!(
+-                !buffer_ptr.is_null(),
+-                "passwd buffer pointer is null (No error handling for this is implemented yet)"
+-            );
+-            passwd_buffer = *buffer_ptr;
+-        }
+-        self.passwd = Some(passwd_buffer);
++        Self { euid: None }
+     }
+-
+-    // Get the syscalls, and process/cache them if they're not gotten already
+-    pub fn get_sysinfo_cached(&mut self) -> libc::sysinfo {
+-        if self.sysinfo.is_none() {
+-            self.cache_sysinfo();
+-        }
+-        self.sysinfo.unwrap()
++    pub fn get_sysinfo_cached(&mut self) -> SysInfo {
++        let up = fs::read_to_string("/proc/uptime")
++            .ok()
++            .and_then(|s| s.split(' ').next().and_then(|v| v.parse::<f64>().ok()))
++            .unwrap_or(0.0);
++        SysInfo { uptime: up as i64, totalswap: 0, freeswap: 0, mem_unit: 1 }
+     }
+     pub fn get_uname_cached(&mut self) -> Utsname {
+-        if self.uname.is_none() {
+-            self.cache_uname();
++        let ver = fs::read_to_string("/proc/version").unwrap_or_default();
++        let mut it = ver.split_whitespace();
++        let sysname = it.next().unwrap_or("MavexOS").to_string();
++        it.next();
++        let release = it.next().unwrap_or("0.0.0").to_string();
++        Utsname {
++            sysname,
++            nodename: fs::read_to_string("/etc/hostname").unwrap_or_default().trim().to_string(),
++            release,
++            version: ver.trim().to_string(),
++            machine: "wasm32".to_string(),
+         }
+-
+-        Utsname::from_libc(&self.uname.unwrap())
+     }
+     pub fn get_euid_cached(&mut self) -> u32 {
+         if self.euid.is_none() {
+-            self.cache_euid();
++            let st = fs::read_to_string("/proc/self/status").unwrap_or_default();
++            let uid = st
++                .lines()
++                .find(|l| l.starts_with("Uid:"))
++                .and_then(|l| l.split_whitespace().nth(2))
++                .and_then(|v| v.parse().ok())
++                .unwrap_or(0);
++            self.euid = Some(uid);
+         }
+-
+         self.euid.unwrap()
+     }
+     pub fn get_passwd_cached(&mut self) -> Passwd {
+-        if self.passwd.is_none() {
+-            self.cache_passwd();
++        let uid = self.get_euid_cached();
++        let pw = fs::read_to_string("/etc/passwd").unwrap_or_default();
++        for l in pw.lines() {
++            let f: Vec<&str> = l.split(':').collect();
++            if f.len() >= 7 && f[2].parse::<u32>().ok() == Some(uid) {
++                return Passwd {
++                    name: f[0].to_string(),
++                    uid,
++                    gid: f[3].parse().unwrap_or(0),
++                    dir: f[5].to_string(),
++                    shell: f[6].to_string(),
++                };
++            }
+         }
+-
+-        Passwd::from_libc(self.passwd.unwrap())
++        Passwd { name: "root".into(), uid, gid: 0, dir: "/root".into(), shell: "/bin/sh".into() }
+     }
+ }
+ 
+-// Better syscall structures than the built in libc ones
+-// These handle all the parsing from C to Rust stuff for us
+-// Anything that doesn't need complex parsing (e.g sysinfo) just returns the
+-// original structure Dead code is allowed in structs, as they may be able to be
+-// used for future things
+ #[allow(dead_code)]
+ pub struct Utsname {
+     pub sysname: String,
+@@ -104,22 +77,6 @@ pub struct Utsname {
+     pub version: String,
+     pub machine: String,
+ }
+-impl Utsname {
+-    pub fn from_libc(utsname: &libc::utsname) -> Self {
+-        Self {
+-            sysname: util::cstr_from_ptr(utsname.sysname.as_ptr())
+-                .expect("Unable to convert CStr to Rust String"),
+-            nodename: util::cstr_from_ptr(utsname.nodename.as_ptr())
+-                .expect("Unable to convert CStr to Rust String"),
+-            release: util::cstr_from_ptr(utsname.release.as_ptr())
+-                .expect("Unable to convert CStr to Rust String"),
+-            version: util::cstr_from_ptr(utsname.version.as_ptr())
+-                .expect("Unable to convert CStr to Rust String"),
+-            machine: util::cstr_from_ptr(utsname.machine.as_ptr())
+-                .expect("Unable to convert CStr to Rust String"),
+-        }
+-    }
+-}
+ 
+ #[allow(dead_code)]
+ pub struct Passwd {
+@@ -129,16 +86,3 @@ pub struct Passwd {
+     pub dir: String,
+     pub shell: String,
+ }
+-impl Passwd {
+-    pub fn from_libc(passwd: libc::passwd) -> Self {
+-        Self {
+-            name: util::cstr_from_ptr(passwd.pw_name)
+-                .expect("Unable to convert CStr to Rust String"),
+-            uid: passwd.pw_uid,
+-            gid: passwd.pw_gid,
+-            dir: util::cstr_from_ptr(passwd.pw_dir).expect("Unable to convert CStr to Rust String"),
+-            shell: util::cstr_from_ptr(passwd.pw_shell)
+-                .expect("Unable to convert CStr to Rust String"),
+-        }
+-    }
+-}
+diff --git a/src/main.rs b/src/main.rs
+index 4eb4e25..7f3efc6 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -267,7 +267,7 @@ fn main() {
+     let full_runtime_bench: Option<Instant> = benchmark_point(true); // True as it's before any parsing
+ 
+     // Are we defo in Linux?
+-    if env::consts::OS != "linux" && env::consts::OS != "android" {
++    if false {
+         println!("CrabFetch only supports Linux! If you want to go through and add support for your own OS, make a pull request :)");
+         exit(-1);
+     }
+diff --git a/src/modules/displays.rs b/src/modules/displays.rs
+index 894f33f..918773b 100644
+--- a/src/modules/displays.rs
++++ b/src/modules/displays.rs
+@@ -12,23 +12,6 @@ use std::{
+     env,
+     fs::{self, read_dir, ReadDir},
+ };
+-use wayland_client::{
+-    protocol::{
+-        wl_output::{self, Transform},
+-        wl_registry,
+-    },
+-    ConnectError, Connection, Dispatch, QueueHandle, WEnum,
+-};
+-use x11rb::{
+-    connection::RequestConnection,
+-    protocol::{
+-        randr::{
+-            self, ConnectionExt, GetCrtcInfoReply, GetOutputInfoReply,
+-            GetScreenResourcesCurrentReply, ModeInfo, MonitorInfo, Rotation,
+-        },
+-        xproto::{self, Screen},
+-    },
+-};
+ 
+ #[derive(Clone)]
+ pub struct DisplayInfo {
+@@ -189,223 +172,8 @@ const DISPLAYS_INFOFLAG_WIDTH: u32 = 8;
+ const DISPLAYS_INFOFLAG_HEIGHT: u32 = 16;
+ const DISPLAYS_INFOFLAG_REFRESH_RATE: u32 = 32;
+ 
+-pub fn get_displays(config: &Configuration) -> Result<Vec<DisplayInfo>, ModuleError> {
+-    // title is tagged onto the end here to account for the title placeholders
+-    let info_flags: u32 = DisplayInfo::gen_info_flags(&format!(
+-        "{}{}",
+-        config.displays.format, config.displays.title
+-    ));
+-
+-    // Good news, during my college final deadline hell over the past 2 months,
+-    // I learned how to use a display server connection!
+-
+-    // Instead of relying on XDG_SESSION_TYPE line Desktop, I simply just check
+-    // the sockets as it can report any string and break if someone's dumb
+-    // enough to do that
+-    if env::var("WAYLAND_DISPLAY").is_ok() {
+-        fetch_wayland(config, info_flags)
+-    } else if env::var("DISPLAY").is_ok() {
+-        fetch_xorg(info_flags)
+-    } else {
+-        Err(ModuleError::new(
+-            "Display",
+-            "Could not identify desktop session type.".to_string(),
+-        ))
+-    }
+-}
+-
+-fn fetch_xorg(info_flags: u32) -> Result<Vec<DisplayInfo>, ModuleError> {
+-    // This has really opened my eyes as to why more pieces of software haven't
+-    // swapped over to Wayland yet, it's so much more convoluted at times
+-    // compared to X11
+-    let (conn, screen_num) = match x11rb::connect(None) {
+-        Ok(r) => r,
+-        Err(e) => {
+-            return Err(ModuleError::new(
+-                "Display",
+-                format!("Can't connect to X11 server: {e}"),
+-            ))
+-        }
+-    };
+-
+-    let screen: &Screen = &x11rb::connection::Connection::setup(&conn).roots[screen_num];
+-
+-    if conn
+-        .extension_information(randr::X11_EXTENSION_NAME)
+-        .is_err()
+-    {
+-        return Err(ModuleError::new(
+-            "Display",
+-            "X11 compositor doesn't have required 'randr' extension.".to_string(),
+-        ));
+-    }
+-
+-    let monitors: Vec<MonitorInfo> = match randr::get_monitors(&conn, screen.root, true) {
+-        Ok(r) => match r.reply() {
+-            Ok(r) => r.monitors,
+-            Err(e) => {
+-                return Err(ModuleError::new(
+-                    "Display",
+-                    format!("Failed to get monitors from randr: {e}"),
+-                ))
+-            }
+-        },
+-        Err(e) => {
+-            return Err(ModuleError::new(
+-                "Display",
+-                format!("Failed to get monitors from randr: {e}"),
+-            ))
+-        }
+-    };
+-    let mut displays: Vec<DisplayInfo> = Vec::new();
+-    for monitor in monitors {
+-        // Get the DRM name
+-        let mut drm_name: String = "Unknown".to_string();
+-        if is_flag_set_u32(info_flags, DISPLAYS_INFOFLAG_DRM_NAME) {
+-            drm_name = match xproto::get_atom_name(&conn, monitor.name) {
+-                Ok(r) => match r.reply() {
+-                    Ok(r) => String::from_utf8(r.name).unwrap(),
+-                    Err(e) => {
+-                        return Err(ModuleError::new(
+-                            "Display",
+-                            format!(
+-                                "Failed to get atomic name for monitor {}: {e}",
+-                                monitor.name
+-                            ),
+-                        ))
+-                    }
+-                },
+-                Err(e) => {
+-                    return Err(ModuleError::new(
+-                        "Display",
+-                        format!(
+-                            "Failed to get atomic name for monitor {}: {e}",
+-                            monitor.name
+-                        ),
+-                    ))
+-                }
+-            };
+-        }
+-        // Find the make/model from the EDID
+-        let (mut make, mut model): (String, String) =
+-            ("Unknown".to_string(), "Unknown".to_string());
+-        if is_flag_set_u32(info_flags, DISPLAYS_INFOFLAG_MAKE)
+-            || is_flag_set_u32(info_flags, DISPLAYS_INFOFLAG_MODEL)
+-        {
+-            (make, model) = match get_edid_makemodel(&drm_name) {
+-                Ok(r) => r,
+-                Err(e) => {
+-                    return Err(ModuleError::new(
+-                        "Display",
+-                        format!("Failed to get make/model for monitor {}: {e}", monitor.name),
+-                    ))
+-                }
+-            };
+-        }
+-
+-        // Find the screen rotation
+-        let resources: GetScreenResourcesCurrentReply =
+-            match conn.randr_get_screen_resources_current(screen.root) {
+-                Ok(r) => match r.reply() {
+-                    Ok(r) => r,
+-                    Err(e) => {
+-                        return Err(ModuleError::new(
+-                            "Display",
+-                            format!("Failed to get screen resources: {e}"),
+-                        ))
+-                    }
+-                },
+-                Err(e) => {
+-                    return Err(ModuleError::new(
+-                        "Display",
+-                        format!("Failed to get screen resources: {e}"),
+-                    ))
+-                }
+-            };
+-
+-        let output: u32 = match monitor.outputs.first() {
+-            Some(r) => *r,
+-            None => {
+-                return Err(ModuleError::new(
+-                    "Display",
+-                    format!("Monitor {} has no outputs", monitor.name),
+-                ))
+-            }
+-        };
+-
+-        let output_info: GetOutputInfoReply =
+-            match conn.randr_get_output_info(output, resources.config_timestamp) {
+-                Ok(r) => match r.reply() {
+-                    Ok(r) => r,
+-                    Err(e) => {
+-                        return Err(ModuleError::new(
+-                            "Display",
+-                            format!("Failed to get output info: {e}"),
+-                        ))
+-                    }
+-                },
+-                Err(e) => {
+-                    return Err(ModuleError::new(
+-                        "Display",
+-                        format!("Failed to get output info: {e}"),
+-                    ))
+-                }
+-            };
+-
+-        let crtc: GetCrtcInfoReply =
+-            match conn.randr_get_crtc_info(output_info.crtc, resources.config_timestamp) {
+-                Ok(r) => match r.reply() {
+-                    Ok(r) => r,
+-                    Err(e) => {
+-                        return Err(ModuleError::new(
+-                            "Display",
+-                            format!("Failed to get crtc info: {e}"),
+-                        ))
+-                    }
+-                },
+-                Err(e) => {
+-                    return Err(ModuleError::new(
+-                        "Display",
+-                        format!("Failed to get crtc info: {e}"),
+-                    ))
+-                }
+-            };
+-
+-        // And finally
+-        let mode: &ModeInfo = match resources.modes.iter().find(|x| x.id == crtc.mode) {
+-            Some(r) => r,
+-            None => {
+-                return Err(ModuleError::new(
+-                    "Display",
+-                    format!("Failed to find mode {}", crtc.mode),
+-                ))
+-            }
+-        };
+-
+-        let mut display = DisplayInfo {
+-            name: drm_name,
+-            make,
+-            model,
+-            width: mode.width,
+-            height: mode.height,
+-            scale: 1,
+-            refresh_rate: u16::try_from(
+-                mode.dot_clock / (u32::from(mode.htotal) * u32::from(mode.vtotal)),
+-            )
+-            .unwrap_or(0),
+-            rotation: match crtc.rotation & 0b111 {
+-                Rotation::ROTATE90 => 90,
+-                Rotation::ROTATE180 => 180,
+-                Rotation::ROTATE270 => 270,
+-                _ => 0,
+-            },
+-        };
+-        display.calc_rotation();
+-        displays.push(display);
+-    }
+-
+-    displays.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+-    Ok(displays)
++pub fn get_displays(_config: &Configuration) -> Result<Vec<DisplayInfo>, ModuleError> {
++    Err(ModuleError::new("Display", "No display server on MavexOS.".to_string()))
+ }
+ 
+ fn get_edid_makemodel(drm_name: &str) -> Result<(String, String), String> {
+@@ -513,188 +281,3 @@ fn get_edid_makemodel(drm_name: &str) -> Result<(String, String), String> {
+ 
+     Ok((make, model))
+ }
+-
+-//
+-// The Wayland Zone
+-//
+-struct WaylandState {
+-    complete: bool,  // Tells us whether to break out of the event loop or not
+-    num_outputs: u8, // How many outputs are waiting to be processed
+-    outputs: HashMap<wl_output::WlOutput, DisplayInfo>, // The output data as it stands
+-}
+-impl Dispatch<wl_registry::WlRegistry, ()> for WaylandState {
+-    fn event(
+-        state: &mut Self,
+-        reg: &wl_registry::WlRegistry,
+-        event: wl_registry::Event,
+-        _: &(),
+-        _: &Connection,
+-        qh: &QueueHandle<WaylandState>,
+-    ) {
+-        if let wl_registry::Event::Global {
+-            name,
+-            interface,
+-            version,
+-        } = event
+-        {
+-            if interface == "wl_output" {
+-                // This is what we're looking for, bind to it
+-                reg.bind::<wl_output::WlOutput, _, _>(name, version, qh, ());
+-                state.num_outputs += 1;
+-            }
+-        }
+-    }
+-}
+-impl Dispatch<wl_output::WlOutput, ()> for WaylandState {
+-    fn event(
+-        state: &mut Self,
+-        output: &wl_output::WlOutput,
+-        event: wl_output::Event,
+-        _: &(),
+-        _: &Connection,
+-        _qh: &QueueHandle<WaylandState>,
+-    ) {
+-        if !state.outputs.contains_key(output) {
+-            state.outputs.insert(output.clone(), DisplayInfo::new());
+-        }
+-
+-        let display: &mut DisplayInfo = state.outputs.get_mut(output).unwrap();
+-        if let wl_output::Event::Name { name } = &event {
+-            display.name = name.to_string();
+-        }
+-        if let wl_output::Event::Scale { factor } = &event {
+-            display.scale = *factor;
+-        }
+-        if let wl_output::Event::Geometry { transform, .. } = &event {
+-            display.rotation = match *transform {
+-                WEnum::Value(v) => match v {
+-                    Transform::_90 | Transform::Flipped90 => 90,
+-                    Transform::_180 | Transform::Flipped180 => 180,
+-                    Transform::_270 | Transform::Flipped270 => 270,
+-                    _ => 0,
+-                },
+-                WEnum::Unknown(_) => 0,
+-            };
+-        }
+-        #[allow(clippy::cast_precision_loss)]
+-        if let wl_output::Event::Mode {
+-            width,
+-            height,
+-            refresh,
+-            ..
+-        } = &event
+-        {
+-            display.width = width.to_string().parse::<u16>().unwrap_or(0);
+-            display.height = height.to_string().parse::<u16>().unwrap_or(0);
+-            display.refresh_rate = (*refresh as f32 / 1000.0)
+-                .round()
+-                .to_string()
+-                .parse::<u16>()
+-                .unwrap_or(0);
+-        }
+-
+-        if !display.name.is_empty()
+-            && display.width != 0
+-            && display.height != 0
+-            && display.refresh_rate != 0
+-        {
+-            // We're done, release it
+-            output.release();
+-            if state.num_outputs == 0 {
+-                state.complete = true;
+-                return;
+-            }
+-            state.num_outputs -= 1;
+-        }
+-    }
+-}
+-// NOTE: Wayland will ignore info flags, as all the events have to be passed
+-// through *regardless* It will only use them for make/model with EDID, nothing
+-// else
+-fn fetch_wayland(config: &Configuration, info_flags: u32) -> Result<Vec<DisplayInfo>, ModuleError> {
+-    let conn: Connection = match Connection::connect_to_env() {
+-        Ok(r) => r,
+-        Err(e) => {
+-            let msg: &str = match e {
+-                ConnectError::NoWaylandLib => "Unable to load the Wayland library.",
+-                ConnectError::NoCompositor => "Unable to find a Wayland compositor.",
+-                ConnectError::InvalidFd => {
+-                    "Found a Wayland compositor, but the socket contained garbage."
+-                }
+-            };
+-            return Err(ModuleError::new(
+-                "Display",
+-                format!("Failed to connect to Wayland compositor: {msg}"),
+-            ));
+-        }
+-    };
+-    let display = conn.display();
+-
+-    let mut event_queue = conn.new_event_queue();
+-    let qh = event_queue.handle();
+-
+-    let _registry = display.get_registry(&qh, ());
+-    let mut data: WaylandState = WaylandState {
+-        complete: false,
+-        num_outputs: 0,
+-        outputs: HashMap::new(),
+-    };
+-
+-    let mut loops: u16 = 0;
+-    while !data.complete {
+-        match event_queue.roundtrip(&mut data) {
+-            Ok(r) => r,
+-            Err(e) => {
+-                return Err(ModuleError::new(
+-                    "Display",
+-                    format!("Compositor roundtrip returned error: {e}"),
+-                ))
+-            }
+-        };
+-        loops += 1;
+-        if loops > 1000 {
+-            return Err(ModuleError::new(
+-                "Display",
+-                "Wayland compositor took too long to respond; over 1000 event loops have passed."
+-                    .to_string(),
+-            ));
+-        }
+-    }
+-
+-    let mut displays: Vec<DisplayInfo> = data.outputs.into_iter().map(|x| x.1.clone()).collect();
+-
+-    for x in &mut displays {
+-        x.calc_rotation();
+-        if config.displays.scale_size {
+-            x.scale_resolution();
+-        }
+-
+-        if is_flag_set_u32(info_flags, DISPLAYS_INFOFLAG_MAKE)
+-            || is_flag_set_u32(info_flags, DISPLAYS_INFOFLAG_MODEL)
+-        {
+-            if util::in_wsl() {
+-                // WSL has no EDID and the compositor would just return weston's
+-                // weird virtual display thing
+-                x.make = "N/A".to_string();
+-                x.model = "N/A".to_string();
+-            } else {
+-                (x.make, x.model) = match get_edid_makemodel(&x.name) {
+-                    Ok(r) => r,
+-                    Err(e) => {
+-                        return Err(ModuleError::new(
+-                            "Display",
+-                            format!("Cannot parse EDID: {e}"),
+-                        ))
+-                    }
+-                };
+-            }
+-        }
+-        if is_flag_set_u32(info_flags, DISPLAYS_INFOFLAG_DRM_NAME) && util::in_wsl() {
+-            // WSL also doesn't have any DRM name
+-            x.name = "N/A".to_string();
+-        }
+-    }
+-
+-    displays.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+-    Ok(displays)
+-}
+diff --git a/src/modules/localip.rs b/src/modules/localip.rs
+index 54788e9..6bf31aa 100644
+--- a/src/modules/localip.rs
++++ b/src/modules/localip.rs
+@@ -132,81 +132,5 @@ pub fn get_local_ips() -> Result<Vec<LocalIPInfo>, ModuleError> {
+         virt_interfaces.push(d.file_name().into_string().unwrap());
+     }
+ 
+-    // Credit to this guy's example https://users.rust-lang.org/t/best-way-to-get-your-own-ips/14308/2
+-    // (Adapted a bit)
+-    unsafe {
+-        // Get the first one
+-        let mut ifaddr: *mut libc::ifaddrs = mem::zeroed();
+-        if libc::getifaddrs(&mut ifaddr) != 0 {
+-            return Err(ModuleError::new(
+-                "LocalIP",
+-                "getifaddrs syscall failed!".to_string(),
+-            ));
+-        }
+-
+-        let mut ifaddrs: libc::ifaddrs = *ifaddr;
+-        let mut inf_loop_protection: u8 = 0;
+-        // Go through every interface
+-        loop {
+-            inf_loop_protection += 1;
+-            let interface_name: String = match util::cstr_from_ptr(ifaddrs.ifa_name) {
+-                Ok(r) => r,
+-                Err(e) => {
+-                    return Err(ModuleError::new(
+-                        "LocalIP",
+-                        format!("Failed to convert interface name into Rust string: {e}"),
+-                    ))
+-                }
+-            };
+-
+-            // Ignore any virtual devices
+-            if virt_interfaces.contains(&interface_name) {
+-                if ifaddrs.ifa_next.is_null() || inf_loop_protection > 25 {
+-                    break;
+-                }
+-                ifaddrs = *ifaddrs.ifa_next;
+-                continue;
+-            }
+-
+-            // the spooky part, at least for me
+-            if i32::from((*ifaddrs.ifa_addr).sa_family) == libc::AF_INET {
+-                // ipv4
+-                let addr: *mut libc::sockaddr_in = (ifaddrs.ifa_addr).cast::<libc::sockaddr_in>();
+-                let ipaddr: Ipv4Addr = Ipv4Addr::from((*addr).sin_addr.s_addr.to_be());
+-
+-                let data: LocalIPInfo = LocalIPInfo {
+-                    interface: interface_name,
+-                    ip_addr: IpAddr::V4(ipaddr).to_string(),
+-                };
+-                addrs.push(data);
+-            } else if i32::from((*ifaddrs.ifa_addr).sa_family) == libc::AF_INET6 {
+-                // ipv6
+-                let addr: *mut libc::sockaddr_in6 = (ifaddrs.ifa_addr).cast::<libc::sockaddr_in6>();
+-                // https://man7.org/linux/man-pages/man7/ipv6.7.html
+-                // "Linux supports it only for link-local addresses"
+-                // I'm guessing that means if it's not 0, it's not a global IP,
+-                // and thus not a "real" ip and should be
+-                // discarded? Not too sure tbh
+-                if (*addr).sin6_scope_id == 0 {
+-                    let ipaddr: Ipv6Addr = Ipv6Addr::from((*addr).sin6_addr.s6_addr);
+-
+-                    let mut interface_name: String = interface_name.clone();
+-                    interface_name.push_str(" (v6)");
+-
+-                    let data: LocalIPInfo = LocalIPInfo {
+-                        interface: interface_name,
+-                        ip_addr: IpAddr::V6(ipaddr).to_string(),
+-                    };
+-                    addrs.push(data);
+-                }
+-            }
+-
+-            if ifaddrs.ifa_next.is_null() || inf_loop_protection > 25 {
+-                break;
+-            }
+-            ifaddrs = *ifaddrs.ifa_next;
+-        }
+-    }
+-
+     Ok(addrs)
+ }
+diff --git a/src/modules/mounts.rs b/src/modules/mounts.rs
+index a861b5a..433b7ab 100644
+--- a/src/modules/mounts.rs
++++ b/src/modules/mounts.rs
+@@ -5,7 +5,6 @@ use crate::{
+     util::{self, is_flag_set_u32},
+     ModuleError,
+ };
+-use libc::statfs;
+ use serde::Deserialize;
+ #[cfg(feature = "android")]
+ use std::env;
+@@ -324,35 +323,10 @@ pub fn get_mounted_drives(config: &Configuration) -> Result<Vec<MountInfo>, Modu
+ // Credit to sysinfo crate for letting me see how to impl this in Rust (and no
+ // it's not just copy pasted i swear)
+ // https://github.com/GuillaumeGomez/sysinfo/blob/master/src/unix/linux/disk.rs#L96
+-#[allow(
+-    clippy::cast_sign_loss,
+-    clippy::cast_possible_truncation,
+-    clippy::cast_precision_loss
+-)]
+-fn call_statfs(path: &str, mount: &mut MountInfo) -> Result<(), ModuleError> {
+-    let mut bytes: Vec<u8> = path.as_bytes().to_vec();
+-    bytes.push(0);
+-    unsafe {
+-        // spooky
+-        let mut buffer: statfs = mem::zeroed();
+-        let x: i32 = statfs(bytes.as_ptr().cast(), &mut buffer);
+-        if x != 0 {
+-            let c: String = match Error::last_os_error().raw_os_error() {
+-                Some(r) => r.to_string(),
+-                None => "N/A".to_string(),
+-            };
+-            return Err(ModuleError::new(
+-                "Mounts",
+-                format!("'statfs' syscall failed for mount point {path} (code {c})"),
+-            ));
+-        }
+-
+-        mount.space_total_kb = (buffer.f_blocks * buffer.f_bsize as u64) / 1000;
+-        mount.space_avail_kb = (buffer.f_bfree * buffer.f_bsize as u64) / 1000;
+-        mount.percent = ((((mount.space_total_kb - mount.space_avail_kb) as f64)
+-            / mount.space_total_kb as f64)
+-            * 100.0) as f32;
+-    }
++fn call_statfs(_path: &str, mount: &mut MountInfo) -> Result<(), ModuleError> {
++    mount.space_total_kb = 0;
++    mount.space_avail_kb = 0;
++    mount.percent = 0.0;
+     Ok(())
+ }
+ 
+diff --git a/src/modules/swap.rs b/src/modules/swap.rs
+index 72c5360..1d1032d 100644
+--- a/src/modules/swap.rs
++++ b/src/modules/swap.rs
+@@ -160,7 +160,7 @@ pub fn get_swap(syscall_cache: &mut SyscallCache) -> Result<SwapInfo, ModuleErro
+     let mut swap: SwapInfo = SwapInfo::new();
+     // no info flags here as it's all dependent on eachother
+ 
+-    let sysinfo: libc::sysinfo = syscall_cache.get_sysinfo_cached();
++    let sysinfo: crate::common_sources::syscalls::SysInfo = syscall_cache.get_sysinfo_cached();
+ 
+     swap.total_kb = (sysinfo.totalswap * u64::from(sysinfo.mem_unit)) / 1000;
+     swap.used_kb = swap.total_kb - ((sysinfo.freeswap * u64::from(sysinfo.mem_unit)) / 1000);
+diff --git a/src/modules/uptime.rs b/src/modules/uptime.rs
+index 36c1d6d..0d288c1 100644
+--- a/src/modules/uptime.rs
++++ b/src/modules/uptime.rs
+@@ -115,6 +115,6 @@ pub fn get_uptime(syscall_cache: &mut SyscallCache) -> Result<UptimeInfo, Module
+ 
+ #[allow(clippy::cast_sign_loss)]
+ fn use_syscall(syscall_cache: &mut SyscallCache, uptime: &mut UptimeInfo) {
+-    let sysinfo_unwrap: libc::sysinfo = syscall_cache.get_sysinfo_cached();
++    let sysinfo_unwrap: crate::common_sources::syscalls::SysInfo = syscall_cache.get_sysinfo_cached();
+     uptime.uptime = Duration::new(sysinfo_unwrap.uptime as u64, 0);
+ }
+diff --git a/src/proccess_info.rs b/src/proccess_info.rs
+index 0b15f45..d054293 100644
+--- a/src/proccess_info.rs
++++ b/src/proccess_info.rs
+@@ -3,7 +3,6 @@
+ use std::{
+     fs::{self, File},
+     io::Read,
+-    os::unix::process::parent_id,
+     path::{Path, PathBuf},
+ };
+ 
+@@ -62,7 +61,7 @@ impl ProcessInfo {
+         }
+     }
+     pub fn new_from_parent() -> Self {
+-        Self::new(parent_id())
++        Self::new(1)
+     }
+ 
+     pub fn is_valid(&self) -> bool {

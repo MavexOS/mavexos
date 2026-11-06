@@ -17,6 +17,7 @@ open("dist/kernel.wasm.js", "w").write(blob("target/wasm32-unknown-unknown/relea
 open("dist/coreutils.wasm.js", "w").write(blob("apps/target/wasm32-wasip1/release/coreutils.wasm", "MAVEX_COREUTILS_B64", f"window.MAVEX_COREUTILS_UTILS = [{utils}];\n"))
 open("dist/brush.wasm.js", "w").write(blob("apps/target/wasm32-wasip1/release/brush.wasm", "MAVEX_BRUSH_B64"))
 open("dist/ext-rg.wasm.js", "w").write(blob(".scratch/ext/rg.wasm", "MAVEX_EXT_RG_B64"))
+open("dist/ext-crabfetch.wasm.js", "w").write(blob(".scratch/ext/crabfetch.wasm", "MAVEX_EXT_CRABFETCH_B64"))
 open("dist/mavexutils.wasm.js", "w").write(blob("apps/target/wasm32-wasip1/release/mavexutils.wasm", "MAVEX_MAVEXUTILS_B64"))
 PY
 ls -la dist/*.js dist/index.html dist/styles.css
