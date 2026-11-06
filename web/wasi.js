@@ -242,6 +242,7 @@
       sysinfo(out) {
         const mem = Math.round(((performance.memory && performance.memory.usedJSHeapSize) || K.x.memory.buffer.byteLength) / 1048576);
         const total = Math.max(mem, Math.round((navigator.deviceMemory || 4) * 1024));
+        K.x.k_set_hostinfo(total * 1024, mem * 1024, navigator.hardwareConcurrency || 1);
         const v = new Uint32Array(5);
         v.set([Math.floor(performance.now() / 1000), total, mem, navigator.hardwareConcurrency || 1, 0]);
         m8().set(new Uint8Array(v.buffer), out); return 0;
@@ -296,7 +297,13 @@
   }
   const brushStr = (ptr) => dec.decode(new Uint8Array(B.inst.exports.memory.buffer, ptr, B.inst.exports.brush_out_len()));
   function takeTty() { const n = K.x.k_tty_take(); return n ? stagedStr(n) : ""; }
+  function pushHostInfo() {
+    const mem = Math.round(((performance.memory && performance.memory.usedJSHeapSize) || K.x.memory.buffer.byteLength) / 1048576);
+    const total = Math.max(mem, Math.round((navigator.deviceMemory || 4) * 1024));
+    K.x.k_set_hostinfo(total * 1024, mem * 1024, navigator.hardwareConcurrency || 1);
+  }
   function brushRun(line) {
+    pushHostInfo();
     const cur = B.inst, bs = enc.encode(line), ex = B.inst.exports, p = ex.brush_alloc(bs.length);
     new Uint8Array(ex.memory.buffer).set(bs, p);
     let code;

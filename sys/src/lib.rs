@@ -3,6 +3,7 @@ use mavex_vfs::{normalize, Errno as VErr, Ino, Kind, Stat, Vfs};
 use std::collections::{BTreeMap, VecDeque};
 
 pub mod net;
+pub mod procfs;
 
 pub mod errno {
     pub const ACCES: u16 = 2;
@@ -109,6 +110,7 @@ pub struct Sys {
     next_pid: u32,
     default_cred: (u32, u32),
     pub net: net::Net,
+    pub hostinfo: procfs::HostInfo,
     pub tty_out: Vec<u8>,
     pub tty_in: VecDeque<u8>,
 }
@@ -121,7 +123,7 @@ pub struct DirEnt {
 
 impl Sys {
     pub fn new(vfs: Vfs) -> Self {
-        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), tty_out: Vec::new(), tty_in: VecDeque::new() }
+        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), tty_out: Vec::new(), tty_in: VecDeque::new() }
     }
 
     pub fn set_default_creds(&mut self, uid: u32, gid: u32) {
@@ -366,6 +368,7 @@ impl Sys {
     pub fn path_open(&mut self, pid: u32, dirfd: u32, path: &str, creat: bool, directory: bool, excl: bool, trunc: bool, append: bool, read: bool, write: bool) -> R<u32> {
         self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
+        if procfs::is_proc(&abs) { self.refresh_procfs(); self.enter(pid); }
         match self.vfs.stat(&abs) {
             Ok(st) if st.kind == Kind::Dir => {
                 if creat && excl {
@@ -427,6 +430,7 @@ impl Sys {
     pub fn path_stat(&mut self, pid: u32, dirfd: u32, path: &str, follow: bool) -> R<Stat> {
         self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
+        if procfs::is_proc(&abs) { self.refresh_procfs(); self.enter(pid); }
         (if follow { self.vfs.stat(&abs) } else { self.vfs.lstat(&abs) }).map_err(verr)
     }
 
@@ -585,6 +589,7 @@ impl Sys {
             FdKind::Dir { path } => path.clone(),
             _ => return Err(errno::NOTDIR),
         };
+        if procfs::is_proc(&path) { self.refresh_procfs(); self.enter(pid); }
         let here = self.vfs.stat(&path).map_err(verr)?;
         let parent = self.vfs.stat(&normalize(&path, "..")).map(|s| s.ino as u64).unwrap_or(here.ino as u64);
         let mut out = vec![

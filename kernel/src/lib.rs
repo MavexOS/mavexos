@@ -23,7 +23,9 @@ thread_local! {
 fn with_sys<R>(f: impl FnOnce(&mut Sys) -> R) -> R {
     SYS.with(|s| {
         let mut s = s.borrow_mut();
-        s.vfs.set_time(unsafe { now_ns() } as u64);
+        let t = unsafe { now_ns() } as u64;
+        s.vfs.set_time(t);
+        s.hostinfo.now_ns = t;
         s.as_root();
         f(&mut s)
     })
@@ -128,6 +130,15 @@ pub unsafe extern "C" fn k_chmod(p: *const u8, n: usize, mode: u32) -> i32 {
 pub unsafe extern "C" fn k_chown(p: *const u8, n: usize, uid: u32, gid: u32) -> i32 {
     let path = str_arg(p, n);
     with_sys(|s| ret(s.vfs.chown(path, uid, gid)))
+}
+
+#[no_mangle]
+pub extern "C" fn k_set_hostinfo(mem_total_kib: u32, mem_used_kib: u32, ncpu: u32) {
+    with_sys(|s| {
+        s.hostinfo.mem_total_kib = mem_total_kib as u64;
+        s.hostinfo.mem_used_kib = mem_used_kib as u64;
+        s.hostinfo.ncpu = ncpu;
+    })
 }
 
 #[no_mangle]
@@ -585,6 +596,12 @@ pub extern "C" fn kmain() {
         v.chmod("/etc/shadow", 0o600).unwrap();
         v.write_file("/etc/sudoers", b"# MavexOS sudoers (no password prompts: ttys cannot block yet)\nroot ALL=(ALL) ALL\n%sudo ALL=(ALL) NOPASSWD: ALL\n").unwrap();
         v.chmod("/etc/sudoers", 0o440).unwrap();
+        s.hostinfo.boot_ns = s.hostinfo.now_ns;
+        s.hostinfo.version = ver.to_string();
+        s.hostinfo.mem_total_kib = 4 * 1024 * 1024;
+        s.hostinfo.mem_used_kib = 32 * 1024;
+        s.hostinfo.ncpu = 1;
+        s.refresh_procfs();
         s.set_default_creds(1000, 1000);
     });
     print("[ ok ] vfs: in-memory root filesystem mounted at /\n");
