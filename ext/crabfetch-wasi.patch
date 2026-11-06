@@ -800,10 +800,10 @@ index ffa0878..edcddf9 100644
 -    }
 -}
 diff --git a/src/config_manager.rs b/src/config_manager.rs
-index 85f93a3..ccf39aa 100644
+index 85f93a3..c8e166b 100644
 --- a/src/config_manager.rs
 +++ b/src/config_manager.rs
-@@ -358,18 +358,13 @@ pub fn fill_builder_defaults(
+@@ -358,14 +358,10 @@ pub fn fill_builder_defaults(
                  "host".to_string(),
                  "displays".to_string(),
                  "os".to_string(),
@@ -818,11 +818,7 @@ index 85f93a3..ccf39aa 100644
                  "initsys".to_string(),
                  "processes".to_string(),
                  "battery".to_string(),
--                "localip".to_string(),
-                 "space".to_string(),
-                 "colors".to_string(),
-                 "bright_colors".to_string(),
-@@ -501,7 +496,7 @@ pub fn fill_builder_defaults(
+@@ -501,7 +497,7 @@ pub fn fill_builder_defaults(
          .unwrap();
      builder = builder.set_default("gpu.title", "GPU").unwrap();
      builder = builder
@@ -831,7 +827,7 @@ index 85f93a3..ccf39aa 100644
          .unwrap();
  
      builder = builder.set_default("memory.title", "Memory").unwrap();
-@@ -543,7 +538,7 @@ pub fn fill_builder_defaults(
+@@ -543,7 +539,7 @@ pub fn fill_builder_defaults(
      builder = builder
          .set_default(
              "displays.format",
@@ -1370,13 +1366,39 @@ index 349804a..40279a8 100644
          let path: String = match process.get_cmdline() {
              Ok(r) => r[0].to_string(),
 diff --git a/src/modules/localip.rs b/src/modules/localip.rs
-index 54788e9..6bf31aa 100644
+index 54788e9..22f489e 100644
 --- a/src/modules/localip.rs
 +++ b/src/modules/localip.rs
-@@ -132,81 +132,5 @@ pub fn get_local_ips() -> Result<Vec<LocalIPInfo>, ModuleError> {
-         virt_interfaces.push(d.file_name().into_string().unwrap());
-     }
+@@ -106,106 +106,17 @@ pub fn get_local_ips() -> Result<Vec<LocalIPInfo>, ModuleError> {
+     // no info flags here as it's all from the same source
+     let mut addrs: Vec<LocalIPInfo> = Vec::new();
  
+-    // First, scan /sys/devices/virtual/net and find any known virtual devices
+-    // Credit to https://stackoverflow.com/a/52561720 for the initial explanation on how the kernel
+-    // handles this stuff
+-    let mut virt_interfaces: Vec<String> = Vec::new();
+-    let dir: ReadDir = match fs::read_dir("/sys/devices/virtual/net") {
+-        Ok(r) => r,
+-        Err(e) => {
+-            return Err(ModuleError::new(
+-                "LocalIP",
+-                format!("Can't read from /sys/devices/virtual/net: {e}"),
+-            ))
+-        }
+-    };
+-    for dev in dir {
+-        let d = match dev {
+-            Ok(r) => r,
+-            Err(e) => {
+-                return Err(ModuleError::new(
+-                    "LocalIP",
+-                    format!("Failed to open directory: {e}"),
+-                ))
+-            }
+-        };
+-        virt_interfaces.push(d.file_name().into_string().unwrap());
+-    }
+-
 -    // Credit to this guy's example https://users.rust-lang.org/t/best-way-to-get-your-own-ips/14308/2
 -    // (Adapted a bit)
 -    unsafe {
@@ -1450,11 +1472,20 @@ index 54788e9..6bf31aa 100644
 -                break;
 -            }
 -            ifaddrs = *ifaddrs.ifa_next;
--        }
--    }
--
++    // MavexOS exposes its interface table as "name family addr prefix up" lines
++    let raw = fs::read_to_string("/proc/net/ifaddrs").map_err(|e| {
++        ModuleError::new("LocalIP", format!("Can't read /proc/net/ifaddrs: {e}"))
++    })?;
++    for line in raw.lines() {
++        let f: Vec<&str> = line.split_whitespace().collect();
++        if f.len() < 5 || f[0] == "lo" || f[1] == "none" {
++            continue;
+         }
++        let name = if f[1] == "inet6" { format!("{} (v6)", f[0]) } else { f[0].to_string() };
++        addrs.push(LocalIPInfo { interface: name, ip_addr: f[2].to_string() });
+     }
+ 
      Ok(addrs)
- }
 diff --git a/src/modules/mounts.rs b/src/modules/mounts.rs
 index a861b5a..09c4505 100644
 --- a/src/modules/mounts.rs

@@ -45,6 +45,17 @@ impl Sys {
         let (bytes, _inodes) = v.usage();
         let used_kib = bytes.div_ceil(1024).min(total);
         w(v, "/proc/fsstat", format!("/ {} {}\n", total, total - used_kib));
+        let _ = v.mkdir("/proc/net", 0o555);
+        let mut ifa = String::new();
+        for i in &self.net.ifaces {
+            if i.addrs.is_empty() {
+                ifa += &format!("{} none - 0 {}\n", i.name, i.up as u8);
+            }
+            for (a, p) in &i.addrs {
+                ifa += &format!("{} {} {} {} {}\n", i.name, if a.is_ipv4() { "inet" } else { "inet6" }, a, p, i.up as u8);
+            }
+        }
+        w(v, "/proc/net/ifaddrs", ifa);
         let busy = (h.busy_ms / 10).min((up * 100.0) as u64);
         let idle = ((up * 100.0) as u64).saturating_sub(busy);
         w(v, "/proc/stat", format!("cpu  {busy} 0 0 {idle} 0 0 0 0 0 0\nbtime {}\nprocesses {}\nprocs_running 1\n", h.boot_ns / 1_000_000_000, self.next_pid.saturating_sub(1)));
