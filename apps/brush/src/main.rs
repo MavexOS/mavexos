@@ -42,6 +42,10 @@ fn main() {
         }
     }
     let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
+        println!("brush {}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
     if args.len() > 1 {
         let (script, _rest) = if args[1] == "-c" {
             (args.get(2).cloned().unwrap_or_default(), &args[args.len().min(3)..])
@@ -72,7 +76,7 @@ fn main() {
         let mut g = c.borrow_mut();
         let sh = g.as_mut().unwrap();
         let params = sh.default_exec_params();
-        let rc = "alias ls='ls --color=auto'; alias ll='ls -l --color=auto'; alias la='ls -A --color=auto'; alias l='ls -CF --color=auto'; alias grep='rg --no-heading --color=auto'";
+        let rc = concat!("export BRUSH_VERSION=", env!("CARGO_PKG_VERSION"), "; alias ls='ls --color=auto'; alias ll='ls -l --color=auto'; alias la='ls -A --color=auto'; alias l='ls -CF --color=auto'; alias grep='rg --no-heading --color=auto'");
         let _ = block(sh.run_string(rc.to_string(), &brush_core::SourceInfo::from("<rc>"), &params));
     });
     unsafe { park() };

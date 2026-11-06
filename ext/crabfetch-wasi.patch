@@ -800,18 +800,29 @@ index ffa0878..edcddf9 100644
 -    }
 -}
 diff --git a/src/config_manager.rs b/src/config_manager.rs
-index 85f93a3..5edb915 100644
+index 85f93a3..ccf39aa 100644
 --- a/src/config_manager.rs
 +++ b/src/config_manager.rs
-@@ -365,7 +365,6 @@ pub fn fill_builder_defaults(
-                 "editor".to_string(),
+@@ -358,18 +358,13 @@ pub fn fill_builder_defaults(
+                 "host".to_string(),
+                 "displays".to_string(),
+                 "os".to_string(),
+-                "packages".to_string(),
+-                "desktop".to_string(),
+                 "terminal".to_string(),
+                 "shell".to_string(),
+-                "editor".to_string(),
                  "uptime".to_string(),
                  "locale".to_string(),
 -                "player".to_string(),
                  "initsys".to_string(),
                  "processes".to_string(),
                  "battery".to_string(),
-@@ -501,7 +500,7 @@ pub fn fill_builder_defaults(
+-                "localip".to_string(),
+                 "space".to_string(),
+                 "colors".to_string(),
+                 "bright_colors".to_string(),
+@@ -501,7 +496,7 @@ pub fn fill_builder_defaults(
          .unwrap();
      builder = builder.set_default("gpu.title", "GPU").unwrap();
      builder = builder
@@ -820,6 +831,15 @@ index 85f93a3..5edb915 100644
          .unwrap();
  
      builder = builder.set_default("memory.title", "Memory").unwrap();
+@@ -543,7 +538,7 @@ pub fn fill_builder_defaults(
+     builder = builder
+         .set_default(
+             "displays.format",
+-            "{width}x{height} @ {refresh_rate}Hz ({name})",
++            "{width}x{height}",
+         )
+         .unwrap();
+     builder = builder.set_default("displays.scale_size", false).unwrap();
 diff --git a/src/main.rs b/src/main.rs
 index 4eb4e25..7f3efc6 100644
 --- a/src/main.rs
@@ -833,8 +853,26 @@ index 4eb4e25..7f3efc6 100644
          println!("CrabFetch only supports Linux! If you want to go through and add support for your own OS, make a pull request :)");
          exit(-1);
      }
+diff --git a/src/modules/battery.rs b/src/modules/battery.rs
+index b981777..a615ddf 100644
+--- a/src/modules/battery.rs
++++ b/src/modules/battery.rs
+@@ -166,12 +166,7 @@ pub fn get_batteries() -> Result<Vec<BatteryInfo>, ModuleError> {
+ 
+     let dir: ReadDir = match fs::read_dir("/sys/class/power_supply/") {
+         Ok(r) => r,
+-        Err(e) => {
+-            return Err(ModuleError::new(
+-                "Battery",
+-                format!("Can't read from /sys/class/power_supply: {e}"),
+-            ))
+-        }
++        Err(_) => return Ok(batteries), // no battery on this machine
+     };
+     for d in dir {
+         if d.is_err() {
 diff --git a/src/modules/displays.rs b/src/modules/displays.rs
-index 894f33f..918773b 100644
+index 894f33f..e76ace3 100644
 --- a/src/modules/displays.rs
 +++ b/src/modules/displays.rs
 @@ -12,23 +12,6 @@ use std::{
@@ -861,7 +899,7 @@ index 894f33f..918773b 100644
  
  #[derive(Clone)]
  pub struct DisplayInfo {
-@@ -189,223 +172,8 @@ const DISPLAYS_INFOFLAG_WIDTH: u32 = 8;
+@@ -189,223 +172,22 @@ const DISPLAYS_INFOFLAG_WIDTH: u32 = 8;
  const DISPLAYS_INFOFLAG_HEIGHT: u32 = 16;
  const DISPLAYS_INFOFLAG_REFRESH_RATE: u32 = 32;
  
@@ -1078,16 +1116,29 @@ index 894f33f..918773b 100644
 -        };
 -        display.calc_rotation();
 -        displays.push(display);
--    }
++pub fn get_displays(_config: &Configuration) -> Result<Vec<DisplayInfo>, ModuleError> {
++    let raw = std::fs::read_to_string("/sys/devices/virtual/mavex/display")
++        .map_err(|e| ModuleError::new("Display", format!("No display info: {e}")))?;
++    let v: Vec<u32> = raw.split_whitespace().filter_map(|x| x.parse().ok()).collect();
++    if v.len() < 2 {
++        return Err(ModuleError::new("Display", "Malformed display info".to_string()));
+     }
 -
 -    displays.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 -    Ok(displays)
-+pub fn get_displays(_config: &Configuration) -> Result<Vec<DisplayInfo>, ModuleError> {
-+    Err(ModuleError::new("Display", "No display server on MavexOS.".to_string()))
++    let mut d = DisplayInfo::new();
++    d.name = "browser".to_string();
++    d.make = "Browser".to_string();
++    d.model = "Viewport".to_string();
++    d.width = v[0] as u16;
++    d.height = v[1] as u16;
++    d.scale = v.get(2).copied().unwrap_or(1) as i32;
++    d.refresh_rate = v.get(3).copied().unwrap_or(0) as u16;
++    Ok(vec![d])
  }
  
  fn get_edid_makemodel(drm_name: &str) -> Result<(String, String), String> {
-@@ -513,188 +281,3 @@ fn get_edid_makemodel(drm_name: &str) -> Result<(String, String), String> {
+@@ -513,188 +295,3 @@ fn get_edid_makemodel(drm_name: &str) -> Result<(String, String), String> {
  
      Ok((make, model))
  }
@@ -1490,6 +1541,24 @@ index 72c5360..1d1032d 100644
  
      swap.total_kb = (sysinfo.totalswap * u64::from(sysinfo.mem_unit)) / 1000;
      swap.used_kb = swap.total_kb - ((sysinfo.freeswap * u64::from(sysinfo.mem_unit)) / 1000);
+diff --git a/src/modules/terminal.rs b/src/modules/terminal.rs
+index 863d142..1fb4d3a 100644
+--- a/src/modules/terminal.rs
++++ b/src/modules/terminal.rs
+@@ -189,6 +189,13 @@ pub fn get_terminal(
+         return Ok(terminal);
+     }
+ 
++    if let Ok(r) = env::var("TERM_PROGRAM") {
++        terminal.name = r;
++        terminal.path = "N/A".to_string();
++        terminal.version = env::var("TERM_PROGRAM_VERSION").unwrap_or_else(|_| "N/A".to_string());
++        return Ok(terminal);
++    }
++
+     // Handle SSH
+     // https://www.oreilly.com/library/view/ssh-the-secure/0596008953/apes12.html
+     if let Ok(r) = env::var("SSH_TTY") {
 diff --git a/src/modules/uptime.rs b/src/modules/uptime.rs
 index 36c1d6d..0d288c1 100644
 --- a/src/modules/uptime.rs
@@ -1536,3 +1605,15 @@ index 0b15f45..adcf8e5 100644
                      Ok(r) => {
                          self.exe = Some(r.display().to_string());
                          if work_around_python && self.exe.as_ref().unwrap().contains("python") {
+diff --git a/src/versions.rs b/src/versions.rs
+index 50f2cc0..41a5415 100644
+--- a/src/versions.rs
++++ b/src/versions.rs
+@@ -21,6 +21,7 @@ pub fn find_version(
+         "konsole" => konsole_version(),
+         "xterm" => xterm_version(),
+ 
++        "brush" => env::var("BRUSH_VERSION").ok(),
+         "bash" => bash_version(),
+         "fish" => fish_version(),
+         "zsh" => zsh_version(),

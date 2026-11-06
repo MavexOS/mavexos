@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "mavex-brush"
-version = "0.0.3"
+version = "0.5.0"
 dependencies = [
  "brush-builtins",
  "brush-core",
@@ -1688,7 +1688,7 @@ version = "0.0.2"
 
 [[package]]
 name = "mavex-utils"
-version = "0.0.9"
+version = "0.0.10"
 
 [[package]]
 name = "memchr"

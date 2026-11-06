@@ -43,7 +43,7 @@ const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p,
 const staged = (n) => dec.decode(new Uint8Array(K.memory.buffer, K.k_result_ptr(), n));
 const useBrush = !location.hash.includes("msh");
 let brushExited = false;
-const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "LANG=en_US.UTF-8", "TERM=xterm-256color", "PWD=/home/user",
+const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "LANG=en_US.UTF-8", "TERM=xterm-256color", "TERM_PROGRAM=mavex-terminal", "PWD=/home/user",
   "PS1=\\[\\e[1;32m\\]\\u@mavex\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ "];
 function startLogin() { R.startBrush("/home/user", LOGIN_ENV, 1); }
 const sys = {
@@ -224,6 +224,37 @@ async function detectGpu() {
   return "Software\nno GPU API available (CPU rendering)";
 }
 
+function sysfile(path, text) {
+  const [pp, pn] = put(enc.encode(path)), [dp, dn] = put(enc.encode(text));
+  try { K.k_sysfile(pp, pn, dp, dn); } finally { K.k_free(pp, pn); K.k_free(dp, dn); }
+}
+async function publishSysfs() {
+  const ud = navigator.userAgentData;
+  const ua = navigator.userAgent;
+  let brand = (ud && ud.brands.filter((b) => !/Not.?A.?Brand/i.test(b.brand)).pop()) || null;
+  let name = brand ? brand.brand : /Firefox\/([\d.]+)/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "Browser";
+  let ver = brand ? brand.version : (/(?:Firefox|Version)\/([\d.]+)/.exec(ua) || [])[1] || "";
+  const plat = (ud && ud.platform) || navigator.platform || "unknown";
+  const dmi = "/sys/devices/virtual/dmi/id/";
+  sysfile(dmi + "product_name", `${name}${ver ? " " + ver : ""} on ${plat}\n`);
+  sysfile(dmi + "sys_vendor", `${location.protocol === "file:" ? "local file" : location.host}\n`);
+  sysfile(dmi + "chassis_type", (ud && ud.mobile) || /Mobi/.test(ua) ? "30\n" : "3\n");
+  const dpr = window.devicePixelRatio || 1;
+  sysfile("/sys/devices/virtual/mavex/display", `${Math.round(screen.width * dpr)} ${Math.round(screen.height * dpr)} ${Math.round(dpr)} 0\n`);
+  if (navigator.getBattery) {
+    try {
+      const b = await navigator.getBattery();
+      const upd = () => {
+        const base = "/sys/class/power_supply/BAT0/";
+        sysfile(base + "type", "Battery\n");
+        sysfile(base + "capacity", `${Math.round(b.level * 100)}\n`);
+        sysfile(base + "status", b.charging ? (b.level >= 1 ? "Full\n" : "Charging\n") : "Discharging\n");
+      };
+      upd(); b.addEventListener("levelchange", upd); b.addEventListener("chargingchange", upd);
+    } catch (e) { /* no battery info */ }
+  }
+}
+
 async function boot() {
   showLine(false);
   const rt = await R.boot(window.MAVEX_KERNEL_B64);
@@ -240,6 +271,7 @@ async function boot() {
   await coreutils; await brushMod; await mxu; await rgMod; await cfMod; await initMod;
   K.kmain();
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
+  await publishSysfs();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
   R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop"]);

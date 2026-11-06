@@ -1283,7 +1283,7 @@ mod tests {
     #[test]
     fn misc_commands_and_completion() {
         let (mut sh, mut v) = setup();
-        assert_eq!(run(&mut sh, &mut v, "uname -a"), "MavexOS mavex 0.0.9 wasm32\n");
+        assert_eq!(run(&mut sh, &mut v, "uname -a"), "MavexOS mavex 0.0.10 wasm32\n");
         assert_eq!(run(&mut sh, &mut v, "whoami"), "user\n");
         run(&mut sh, &mut v, "export FOO=bar");
         assert_eq!(run(&mut sh, &mut v, "echo $FOO"), "bar\n");

@@ -142,6 +142,22 @@ pub extern "C" fn k_set_hostinfo(mem_total_kib: u32, mem_used_kib: u32, ncpu: u3
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn k_sysfile(pp: *const u8, pn: usize, dp: *const u8, dn: usize) {
+    let path = str_arg(pp, pn).to_string();
+    let data = std::slice::from_raw_parts(dp, dn).to_vec();
+    with_sys(|s| {
+        let mut cur = String::new();
+        let parts: Vec<&str> = path.split('/').filter(|x| !x.is_empty()).collect();
+        for d in &parts[..parts.len().saturating_sub(1)] {
+            cur.push('/');
+            cur.push_str(d);
+            let _ = s.vfs.mkdir(&cur, 0o555);
+        }
+        let _ = s.vfs.write_file(&path, &data);
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn k_set_gpu(p: *const u8, n: usize) {
     let text = str_arg(p, n).to_string();
     with_sys(|s| {
