@@ -1688,7 +1688,7 @@ version = "0.0.2"
 
 [[package]]
 name = "mavex-utils"
-version = "0.0.4"
+version = "0.0.5"
 
 [[package]]
 name = "memchr"
