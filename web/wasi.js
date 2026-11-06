@@ -60,7 +60,7 @@
     ex.asyncify_start_unwind(t.data);
     return 0;
   }
-  function makeTask(pid, sync) { return { pid, sync, inst: null, asyncify: false, data: 0, blocked: false, rewinding: false, waitCond: null, wakeAt: 0, entry: null, done: true, onFinish: null, shell: false, killed: false }; }
+  function makeTask(pid, sync) { return { pid, sync, inst: null, asyncify: false, data: 0, blocked: false, rewinding: false, waitCond: null, wakeAt: 0, entry: null, done: true, onFinish: null, shell: false, killed: false, daemon: false, killCode: 130 }; }
   function attach(t, inst) { t.inst = inst; t.asyncify = typeof inst.exports.asyncify_get_state === "function"; }
   function launch(t, entry, onFinish) { t.entry = entry; t.onFinish = onFinish; t.done = false; t.blocked = false; t.rewinding = false; S.tasks.set(t.pid, t); }
   function stepTask(t) {
@@ -92,7 +92,7 @@
         progressed = false;
         for (const t of [...S.tasks.values()]) {
           if (t.done) continue;
-          if (t.killed) { t.done = true; S.tasks.delete(t.pid); K.x.k_proc_exit(t.pid, 130); if (t.onFinish) t.onFinish(130); progressed = true; continue; }
+          if (t.killed) { t.done = true; S.tasks.delete(t.pid); K.x.k_proc_exit(t.pid, t.killCode); if (t.onFinish) t.onFinish(t.killCode); progressed = true; continue; }
           if (t.blocked && !t.waitCond()) continue;
           t.blocked = false; progressed = true; stepTask(t);
         }
@@ -107,8 +107,8 @@
     if (next < Infinity) S.timer = setTimeout(pump, Math.max(0, next - performance.now()));
     if (S.onIdle) S.onIdle();
   }
-  function killForeground() { for (const t of S.tasks.values()) if (!t.shell) t.killed = true; pump(); }
-  const foregroundBusy = () => [...S.tasks.values()].some((t) => !t.shell && !t.done);
+  function killForeground() { for (const t of S.tasks.values()) if (!t.shell && !t.daemon) t.killed = true; pump(); }
+  const foregroundBusy = () => [...S.tasks.values()].some((t) => !t.shell && !t.daemon && !t.done);
 
   /* ---- WASI for one process ---- */
   function makeWasi(pid, getMem, task) {
@@ -172,21 +172,39 @@
       proc_raise() { throw new ExitSignal(134); },
       poll_oneoff(inp, out, nsubs, nev) {
         const rw = rewound(task);
-        const d = dv(); let deadline = 0, n = 0;
+        const d = dv(); let end = 0; const fds = [];
         for (let i = 0; i < nsubs; i++) {
           const s = inp + i * 48, tag = d.getUint8(s + 8);
-          if (tag === 0) { const t = Number(d.getBigUint64(s + 24, true)) / 1e6; const abs = d.getUint16(s + 40, true) & 1; deadline = Math.max(deadline, abs ? t : performance.timeOrigin + performance.now() + t); }
+          if (tag === 0) {
+            const t = Number(d.getBigUint64(s + 24, true)) / 1e6, abs = d.getUint16(s + 40, true) & 1;
+            const e = (abs ? t : performance.timeOrigin + performance.now() + t) - performance.timeOrigin;
+            end = end ? Math.min(end, e) : e;
+          } else if (tag === 1 || tag === 2) fds.push({ fd: d.getUint32(s + 16, true), w: tag === 2 ? 1 : 0 });
         }
-        if (deadline) {
-          const end = (rw && task.pollEnd) || deadline - performance.timeOrigin;
-          if (canBlock(task)) {
-            if (performance.now() < end) { task.pollEnd = end; return block(task, () => performance.now() >= end, end); }
-            task.pollEnd = 0;
-          } else while (performance.now() < end) { /* sync context: busy wait */ }
+        if (rw && task.pollEnd) end = task.pollEnd;
+        const anyReady = () => fds.some((f) => x.k_fd_ready(pid, f.fd, f.w) !== 0);
+        if (!anyReady()) {
+          if (end) {
+            if (performance.now() < end) {
+              if (canBlock(task)) { task.pollEnd = end; return block(task, () => anyReady() || performance.now() >= end, end); }
+              while (performance.now() < end && !anyReady()) { /* sync context: busy wait */ }
+            }
+          } else if (fds.length && canBlock(task)) return block(task, anyReady);
         }
+        task.pollEnd = 0;
+        const expired = end && performance.now() >= end;
+        let n = 0;
         for (let i = 0; i < nsubs; i++) {
+          const s = inp + i * 48, e = out + n * 32, tag = d.getUint8(s + 8);
+          const fire = tag === 0 ? expired : (tag === 1 || tag === 2) ? x.k_fd_ready(pid, d.getUint32(s + 16, true), tag === 2 ? 1 : 0) !== 0 : true;
+          if (!fire) continue;
+          dv().setBigUint64(e, d.getBigUint64(s, true), true); d.setUint16(e + 8, 0, true); d.setUint8(e + 10, tag);
+          d.setBigUint64(e + 16, 0n, true); d.setUint16(e + 24, 0, true); n++;
+        }
+        if (n === 0) for (let i = 0; i < nsubs; i++) {
           const s = inp + i * 48, e = out + n * 32;
-          dv().setBigUint64(e, d.getBigUint64(s, true), true); d.setUint16(e + 8, 0, true); d.setUint8(e + 10, d.getUint8(s + 8)); n++;
+          dv().setBigUint64(e, d.getBigUint64(s, true), true); d.setUint16(e + 8, 0, true); d.setUint8(e + 10, d.getUint8(s + 8));
+          d.setBigUint64(e + 16, 0n, true); d.setUint16(e + 24, 0, true); n++;
         }
         setU32(nev, n); return 0;
       },
@@ -314,7 +332,7 @@
       spawn(pp, pn, ap, an, ep, en, cp, cn, s0, s1, s2) {
         const [[a, al], [b, bl], [c, cl], [d, dl]] = packed(str(pp, pn), m8().slice(ap, ap + an), m8().slice(ep, ep + en), str(cp, cn));
         const r = K.x.k_spawn(pid, a, al, b, bl, c, cl, d, dl, s0, s1, s2);
-        if (r > 0 && !task.sync) startProcess(r);
+        if (r > 0 && !task.sync) startProcess(r, task.daemon);
         return r;
       },
       ready: () => 1,
@@ -323,6 +341,16 @@
         rewound(task);
         if (!K.x.k_proc_exited(c) && canBlock(task)) return block(task, () => K.x.k_proc_exited(c) !== 0);
         return K.x.k_wait(c);
+      },
+      poll_child: (c) => (K.x.k_proc_exited(c) ? K.x.k_wait(c) : -1),
+      kill(c, sig) {
+        const cr = K.x.k_proc_creds(pid) < 0 ? null : new Uint32Array(staged(K.x.k_proc_creds(pid)).slice().buffer);
+        const tr = K.x.k_proc_creds(c) < 0 ? null : new Uint32Array(staged(K.x.k_proc_creds(c)).slice().buffer);
+        if (!tr) return -3;
+        if (cr && cr[2] !== 0 && cr[0] !== tr[0]) return -1;
+        const under = (p) => { for (let i = 0; i < 64 && p > 0; i++) { if (p === c) return true; p = K.x.k_proc_ppid(p); } return false; };
+        for (const t of S.tasks.values()) if (under(t.pid)) { t.killed = true; t.killCode = 128 + (sig || 15); }
+        pump(); return 0;
       },
       tty_raw(on) { S.rawTty = !!on; if (S.onTtyMode) S.onTtyMode(S.rawTty); return 0; },
       dup: (fd) => K.x.k_fd_dup(pid, fd),
@@ -381,13 +409,22 @@
   }
 
   // Asynchronous process: scheduled by pump(), may suspend in blocking imports.
-  function startProcess(pid) {
+  function startProcess(pid, daemon) {
     const mod = resolveModule(pid);
     if (!mod) { errTo(pid, "mavexos: cannot execute: not a program\n"); K.x.k_proc_exit(pid, 126); return; }
-    const task = makeTask(pid, false);
+    const task = makeTask(pid, false); task.daemon = !!daemon;
     let inst;
     try { inst = instantiate(pid, mod, task); } catch (e) { errTo(pid, "mavexos: cannot load program: " + (e && e.message || e) + "\n"); K.x.k_proc_exit(pid, 126); return; }
     launch(task, () => inst.exports._start(), (code) => K.x.k_proc_exit(pid, code));
+  }
+
+  function startInit() {
+    const [[a, al], [b, bl], [c, cl], [d, dl]] = packed("/bin/init", "init\0", "PATH=/bin\0HOME=/root\0LANG=en_US.UTF-8\0", "/");
+    const pid = K.x.k_spawn(0, a, al, b, bl, c, cl, d, dl, -2, -2, -2);
+    if (pid < 0) throw new Error("init spawn failed " + pid);
+    K.x.k_force_creds(pid, 0, 0);
+    startProcess(pid, true); pump();
+    return pid;
   }
 
   /* ---- persistent brush login shell ---- */
@@ -397,6 +434,7 @@
     const [[a, al], [b, bl], [c, cl], [d, dl]] = packed("/bin/brush", "brush\0", env.join("\0") + "\0", cwd);
     const pid = x.k_spawn(ppid || 0, a, al, b, bl, c, cl, d, dl, -1, -1, -1);
     if (pid < 0) throw new Error("brush spawn failed " + pid);
+    if (ppid === 1) x.k_force_creds(pid, 1000, 1000);
     const task = makeTask(pid, true); task.shell = true;
     const inst = instantiate(pid, mod, task);
     const prev = S.cur; S.cur = task;
@@ -487,5 +525,5 @@
     }
   }
 
-  window.MavexRuntime = { S, pump, killForeground, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { startInit, startProcess, S, pump, killForeground, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
 })();

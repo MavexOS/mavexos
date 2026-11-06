@@ -758,6 +758,24 @@ index 29f7543..4a8c0b3 100644
      if config.gpu.detect_through_driver {
          match fill_from_drivers(
              &mut gpus,
+diff --git a/src/modules/initsys.rs b/src/modules/initsys.rs
+index 349804a..40279a8 100644
+--- a/src/modules/initsys.rs
++++ b/src/modules/initsys.rs
+@@ -134,6 +134,13 @@ pub fn get_init_system(
+     // symlink Thanks to https://superuser.com/a/1183819
+     let mut process: ProcessInfo = ProcessInfo::new(1);
+ 
++    if let Ok(v) = fs::read_to_string("/run/mavex-init/version") {
++        initsys.name = "mavex-init".to_string();
++        initsys.path = "/bin/init".to_string();
++        initsys.version = v.trim().to_string();
++        return Ok(initsys);
++    }
++
+     if is_flag_set_u32(info_flags, INITSYS_INFOFLAG_PATH) {
+         let path: String = match process.get_cmdline() {
+             Ok(r) => r[0].to_string(),
 diff --git a/src/modules/localip.rs b/src/modules/localip.rs
 index 54788e9..6bf31aa 100644
 --- a/src/modules/localip.rs
@@ -935,7 +953,7 @@ index 36c1d6d..0d288c1 100644
      uptime.uptime = Duration::new(sysinfo_unwrap.uptime as u64, 0);
  }
 diff --git a/src/proccess_info.rs b/src/proccess_info.rs
-index 0b15f45..0e51ac5 100644
+index 0b15f45..adcf8e5 100644
 --- a/src/proccess_info.rs
 +++ b/src/proccess_info.rs
 @@ -3,7 +3,6 @@
@@ -946,16 +964,20 @@ index 0b15f45..0e51ac5 100644
      path::{Path, PathBuf},
  };
  
-@@ -62,7 +61,7 @@ impl ProcessInfo {
+@@ -62,7 +61,11 @@ impl ProcessInfo {
          }
      }
      pub fn new_from_parent() -> Self {
 -        Self::new(parent_id())
-+        Self::new(1)
++        let ppid = fs::read_to_string("/proc/self/stat")
++            .ok()
++            .and_then(|t| t.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().nth(1).and_then(|p| p.parse::<u32>().ok())))
++            .unwrap_or(1);
++        Self::new(ppid)
      }
  
      pub fn is_valid(&self) -> bool {
-@@ -73,7 +72,7 @@ impl ProcessInfo {
+@@ -73,7 +76,7 @@ impl ProcessInfo {
          match &self.exe {
              Some(r) => Ok(r.to_string()),
              None => {

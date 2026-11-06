@@ -44,7 +44,7 @@ const useBrush = !location.hash.includes("msh");
 let brushExited = false;
 const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "LANG=en_US.UTF-8", "TERM=xterm-256color", "PWD=/home/user",
   "PS1=\\[\\e[1;32m\\]\\u@mavex\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ "];
-function startLogin() { R.startBrush("/home/user", LOGIN_ENV); }
+function startLogin() { R.startBrush("/home/user", LOGIN_ENV, 1); }
 const sys = {
   mkdir: (path) => withStr(path, (p, n) => K.k_mkdir(p, n)),
   unlink: (path) => withStr(path, (p, n) => K.k_unlink(p, n)),
@@ -229,9 +229,10 @@ async function boot() {
   const mxu = R.registerModule("mavexutils", window.MAVEX_MAVEXUTILS_B64);
   const rgMod = R.registerModule("rg", window.MAVEX_EXT_RG_B64);
   const cfMod = R.registerModule("crabfetch", window.MAVEX_EXT_CRABFETCH_B64);
+  const initMod = R.registerModule("init", window.MAVEX_EXT_INIT_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
   if (!FAST) await sleep(350);
-  await coreutils; await brushMod; await mxu; await rgMod; await cfMod;
+  await coreutils; await brushMod; await mxu; await rgMod; await cfMod; await initMod;
   K.kmain();
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
@@ -239,7 +240,10 @@ async function boot() {
   R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which"]);
   R.install("rg", []);
   R.install("crabfetch", ["crab-fetch"]);
+  R.install("init", ["systemctl", "journalctl"]);
   R.installSetuid("mavexutils", ["sudo", "su"]);
+  R.startInit();
+  for (let i = 0; i < 60 && typeof sys.readFile("/run/mavex-init/booted") !== "string"; i++) await sleep(50);
   if (useBrush) startLogin();
   fitCols();
   window.mavex = sys;

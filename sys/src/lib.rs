@@ -157,6 +157,15 @@ impl Sys {
     }
 
     /// Privileged (euid 0) credential change: sets real and effective ids.
+    pub fn force_proc_creds(&mut self, pid: u32, uid: u32, gid: u32) -> R<()> {
+        let p = self.procs.get_mut(&pid).ok_or(errno::CHILD)?;
+        p.uid = uid;
+        p.gid = gid;
+        p.euid = uid;
+        p.egid = gid;
+        Ok(())
+    }
+
     pub fn set_proc_creds(&mut self, pid: u32, uid: u32, gid: u32) -> R<()> {
         let p = self.procs.get_mut(&pid).ok_or(errno::CHILD)?;
         if p.euid != 0 {
@@ -215,6 +224,10 @@ impl Sys {
 
     pub fn proc_exited(&self, pid: u32) -> bool {
         self.procs.get(&pid).is_none_or(|p| p.exit.is_some())
+    }
+
+    pub fn proc_ppid(&self, pid: u32) -> Option<u32> {
+        self.procs.get(&pid).map(|p| p.ppid)
     }
 
     pub fn proc_cwd(&self, pid: u32) -> Option<String> {
@@ -376,7 +389,13 @@ impl Sys {
     // ---- paths ----
     fn resolve(&self, pid: u32, dirfd: u32, path: &str) -> R<String> {
         match &self.fd(pid, dirfd)?.kind {
-            FdKind::Dir { path: base } => Ok(normalize(base, path)),
+            FdKind::Dir { path: base } => {
+                let abs = normalize(base, path);
+                Ok(match abs.strip_prefix("/proc/self") {
+                    Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("/proc/{pid}{rest}"),
+                    _ => abs,
+                })
+            }
             _ => Err(errno::NOTDIR),
         }
     }

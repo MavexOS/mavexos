@@ -97,7 +97,7 @@ async function run(name, type) {
   await cmd(p, "cd ~/proj && echo hi | tee uu.txt | tr a-z A-Z && cat uu.txt && ls -l uu.txt");
   await cmd(p, "ls /nonexistent; echo rc=$?");
   t = await text(p);
-  await expect("uutils ls columns", /bin\s+etc\s+home\s+proc\s+root\s+sys\s+tmp\s+usr/.test(t) && !/bin\netc\nhome/.test(t));
+  await expect("uutils ls columns", /bin\s+etc\s+home\s+proc\s+root\s+run\s+sys\s+tmp\s+usr\s+var/.test(t) && !/bin\netc\nhome/.test(t));
   await expect("uutils pipe", t.includes("hostname") && /\n100000\n/.test(t));
   await expect("yes|head", /\ny\ny\n/.test(t));
   await expect("tee/tr/cat", t.includes("HI") && /\nhi\n/.test(t) && /-rw\S+ \d+ \S+ \S+ 3 /.test(t));
@@ -147,15 +147,24 @@ async function runBrush(name, type) {
   await ty("echo after-ctrl-c");
   await ty("(sleep 0.3; echo slow-a) | cat");
   await new Promise((r) => setTimeout(r, 1200));
+  await ty("systemctl is-active mavex-heartbeat; systemctl stop mavex-heartbeat; systemctl is-active mavex-heartbeat; systemctl start mavex-heartbeat; systemctl is-active mavex-heartbeat; journalctl -u mavex-heartbeat --no-pager | tail -n 3; journalctl --no-pager | head -n 8; systemctl list-units | head -n 6; cat /proc/1/comm");
+  await new Promise((r) => setTimeout(r, 4000));
+  await ty("crabfetch");
+  await new Promise((r) => setTimeout(r, 2500));
   const t = await text(p);
+  if (!t.includes("heartbeat: system is alive")) fails.push("journal captures service output");
+  if (!t.includes("Reached target") && !t.includes("Started MavexOS heartbeat")) fails.push("journal has init messages");
+  if (!/\nactive\ninactive\nactive\n/.test(t.replace(/\n+/g, "\n"))) fails.push("systemctl start/stop cycle");
+  if (!/Shell > brush/.test(t)) fails.push("crabfetch finds shell via /proc/self ppid");
+  if (!t.includes("mavex-init")) fails.push("crabfetch names init system");
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.6\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.7\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   if (errs.length) fails.push("pageerror: " + errs.join("; "));
   console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (brush)`, fails.length ? fails : "");
-  if (fails.length) { failed = true; console.log(t.slice(-1500)); }
+  if (fails.length) { failed = true; console.log(t.slice(-5000)); }
   await b.close();
 }
 

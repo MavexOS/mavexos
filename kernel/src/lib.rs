@@ -249,6 +249,11 @@ pub extern "C" fn k_tty_take() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn k_proc_ppid(pid: u32) -> i32 {
+    with_sys(|s| s.proc_ppid(pid).map_or(-1, |p| p as i32))
+}
+
+#[no_mangle]
 pub extern "C" fn k_proc_creds(pid: u32) -> i32 {
     with_sys(|s| wr(s.proc_creds(pid), |(u, g, eu, eg)| {
         let mut b = Vec::new();
@@ -257,6 +262,11 @@ pub extern "C" fn k_proc_creds(pid: u32) -> i32 {
         }
         stage(b)
     }))
+}
+
+#[no_mangle]
+pub extern "C" fn k_force_creds(pid: u32, uid: u32, gid: u32) -> i32 {
+    with_sys(|s| wr(s.force_proc_creds(pid, uid, gid), |_| 0))
 }
 
 #[no_mangle]
