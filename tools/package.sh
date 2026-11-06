@@ -20,7 +20,7 @@ python3 - "dist" "$NAME" <<'PY'
 import sys, zipfile, os
 d, n = sys.argv[1:3]
 with zipfile.ZipFile(f"{d}/{n}.zip", "w", zipfile.ZIP_DEFLATED) as z:
-    for f in ("index.html", "styles.css", "scripts.js", "wasi.js", "kernel.wasm.js", "coreutils.wasm.js", "brush.wasm.js", "mavexutils.wasm.js", "ext-rg.wasm.js ext-crabfetch.wasm.js", "README.txt"):
+    for f in ("index.html", "styles.css", "scripts.js", "wasi.js", "kernel.wasm.js", "coreutils.wasm.js", "brush.wasm.js", "mavexutils.wasm.js", "ext-rg.wasm.js", "ext-crabfetch.wasm.js", "README.txt"):
         z.write(f"{d}/{n}/{f}", f"{n}/{f}")
 PY
 echo "packaged dist/$NAME.zip"
