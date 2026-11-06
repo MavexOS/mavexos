@@ -1,0 +1,15 @@
+diff --git a/crates/cli/src/lib.rs b/crates/cli/src/lib.rs
+index b27592d..c67b1cd 100644
+--- a/crates/cli/src/lib.rs
++++ b/crates/cli/src/lib.rs
+@@ -242,8 +242,8 @@ pub fn is_readable_stdin() -> bool {
+ 
+     #[cfg(not(any(unix, windows)))]
+     fn imp() -> bool {
+-        log::debug!("on non-{{Unix,Windows}}, assuming stdin is not readable");
+-        false
++        log::debug!("on non-{{Unix,Windows}} (wasi), assuming a non-terminal stdin is readable");
++        true
+     }
+ 
+     !std::io::stdin().is_terminal() && imp()

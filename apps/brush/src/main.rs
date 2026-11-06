@@ -72,7 +72,7 @@ fn main() {
         let mut g = c.borrow_mut();
         let sh = g.as_mut().unwrap();
         let params = sh.default_exec_params();
-        let rc = "alias ls='ls --color=auto'; alias ll='ls -l --color=auto'; alias la='ls -A --color=auto'; alias l='ls -CF --color=auto'; alias grep='grep --color=auto'";
+        let rc = "alias ls='ls --color=auto'; alias ll='ls -l --color=auto'; alias la='ls -A --color=auto'; alias l='ls -CF --color=auto'; alias grep='rg --no-heading --color=auto'";
         let _ = block(sh.run_string(rc.to_string(), &brush_core::SourceInfo::from("<rc>"), &params));
     });
     unsafe { park() };
