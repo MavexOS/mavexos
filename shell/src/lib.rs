@@ -155,6 +155,7 @@ impl Shell {
             ("HOSTNAME", "mavex"),
             ("PATH", "/bin"),
             ("SHELL", "/bin/msh"),
+            ("LANG", "en_US.UTF-8"),
         ] {
             env.insert(k.to_string(), v.to_string());
         }
@@ -992,7 +993,13 @@ impl Shell {
 
     pub fn complete(&self, vfs: &Vfs, word: &str, is_first: bool) -> Vec<String> {
         if is_first && !word.contains('/') {
-            return COMMANDS.iter().filter(|c| c.starts_with(word)).map(|s| s.to_string()).collect();
+            let mut v: Vec<String> = COMMANDS.iter().filter(|c| c.starts_with(word)).map(|s| s.to_string()).collect();
+            if let Ok(names) = vfs.readdir("/bin") {
+                v.extend(names.into_iter().filter(|n| n.starts_with(word)));
+            }
+            v.sort();
+            v.dedup();
+            return v;
         }
         let (dir_part, pat) = match word.rfind('/') {
             Some(i) => (&word[..=i], &word[i + 1..]),
@@ -1276,7 +1283,7 @@ mod tests {
     #[test]
     fn misc_commands_and_completion() {
         let (mut sh, mut v) = setup();
-        assert_eq!(run(&mut sh, &mut v, "uname -a"), "MavexOS mavex 0.0.4 wasm32\n");
+        assert_eq!(run(&mut sh, &mut v, "uname -a"), "MavexOS mavex 0.0.6 wasm32\n");
         assert_eq!(run(&mut sh, &mut v, "whoami"), "user\n");
         run(&mut sh, &mut v, "export FOO=bar");
         assert_eq!(run(&mut sh, &mut v, "echo $FOO"), "bar\n");

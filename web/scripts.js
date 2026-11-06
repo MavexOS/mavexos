@@ -42,7 +42,7 @@ const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p,
 const staged = (n) => dec.decode(new Uint8Array(K.memory.buffer, K.k_result_ptr(), n));
 const useBrush = !location.hash.includes("msh");
 let brushExited = false;
-const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "TERM=xterm-256color", "PWD=/home/user",
+const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "LANG=en_US.UTF-8", "TERM=xterm-256color", "PWD=/home/user",
   "PS1=\\[\\e[1;32m\\]\\u@mavex\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ "];
 function startLogin() { R.startBrush("/home/user", LOGIN_ENV); }
 const sys = {
@@ -197,6 +197,28 @@ function fitCols() {
 window.addEventListener("resize", fitCols);
 
 /* ---------- boot ---------- */
+async function detectGpu() {
+  const lim = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), 1500))]);
+  try {
+    if (navigator.gpu) {
+      const a = await lim(navigator.gpu.requestAdapter());
+      if (a) {
+        const i = a.info || (a.requestAdapterInfo ? await lim(a.requestAdapterInfo()) : null) || {};
+        const m = [i.vendor, i.description || i.architecture || i.device].filter(Boolean).join(" ");
+        return "WebGPU\n" + (m || "adapter (details hidden by browser)");
+      }
+    }
+  } catch (e) {}
+  try {
+    const gl = document.createElement("canvas").getContext("webgl") || document.createElement("canvas").getContext("experimental-webgl");
+    if (gl) {
+      const x = gl.getExtension("WEBGL_debug_renderer_info");
+      return "WebGL\n" + ((x && gl.getParameter(x.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER) || "renderer");
+    }
+  } catch (e) {}
+  return "Software\nno GPU API available (CPU rendering)";
+}
+
 async function boot() {
   showLine(false);
   const rt = await R.boot(window.MAVEX_KERNEL_B64);
@@ -211,6 +233,7 @@ async function boot() {
   if (!FAST) await sleep(350);
   await coreutils; await brushMod; await mxu; await rgMod; await cfMod;
   K.kmain();
+  withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
   R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which"]);

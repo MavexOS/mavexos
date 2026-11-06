@@ -20,6 +20,48 @@ index a889ca3..48968a7 100644
  raw-cpuid = "11.1.0"
 +
 +[workspace]
+diff --git a/logo/mavexos.txt b/logo/mavexos.txt
+new file mode 100644
+index 0000000..337e0da
+--- /dev/null
++++ b/logo/mavexos.txt
+@@ -0,0 +1,14 @@
++    .:::.          .:::.    
++   :#####:        :#####:   
++  :#######:      :#######:  
++  :########:    :########:  
++  :#########:  :#########:  
++  :##########::##########:  
++  :###################### :  
++  :#### ########## ####### : 
++  :####  ########  #######:  
++  :####   ######   #######:  
++  :####    ####    #######:  
++  :####     ##     #######:  
++  :####            #######:  
++   ':##'            ':##'   
+diff --git a/src/ascii.rs b/src/ascii.rs
+index cdb41c5..4c3a74f 100644
+--- a/src/ascii.rs
++++ b/src/ascii.rs
+@@ -66,6 +66,7 @@ pub fn find_ascii(os: &str, ignore_custom: bool) -> (Cow<'_, str>, u16) {
+         "almalinux" => ascii_art::ALMA,
+         "android" => ascii_art::ANDROID,
+         "garuda" => ascii_art::GARUDA,
++        "mavexos" => ascii_art::MAVEXOS,
+         _ => ("", 0),
+     };
+ 
+diff --git a/src/ascii_art.rs b/src/ascii_art.rs
+index b566ea4..7e1cf5d 100644
+--- a/src/ascii_art.rs
++++ b/src/ascii_art.rs
+@@ -21,3 +21,5 @@ pub const GARUDA: (&str, u16) = (include_str!("../logo/garuda.txt"), 36);
+ pub const BAZZITE: (&str, u16) = (include_str!("../logo/bazzite.txt"), 36);
+ pub const ANDROID: (&str, u16) = (include_str!("../logo/android.txt"), 38);
+ pub const CACHYOS: (&str, u16) = (include_str!("../logo/cachyos.txt"), 28);
++
++pub const MAVEXOS: (&str, u16) = (include_str!("../logo/mavexos.txt"), 28);
 diff --git a/src/common_sources/syscalls.rs b/src/common_sources/syscalls.rs
 index ffa0878..edcddf9 100644
 --- a/src/common_sources/syscalls.rs
@@ -215,6 +257,27 @@ index ffa0878..edcddf9 100644
 -        }
 -    }
 -}
+diff --git a/src/config_manager.rs b/src/config_manager.rs
+index 85f93a3..5edb915 100644
+--- a/src/config_manager.rs
++++ b/src/config_manager.rs
+@@ -365,7 +365,6 @@ pub fn fill_builder_defaults(
+                 "editor".to_string(),
+                 "uptime".to_string(),
+                 "locale".to_string(),
+-                "player".to_string(),
+                 "initsys".to_string(),
+                 "processes".to_string(),
+                 "battery".to_string(),
+@@ -501,7 +500,7 @@ pub fn fill_builder_defaults(
+         .unwrap();
+     builder = builder.set_default("gpu.title", "GPU").unwrap();
+     builder = builder
+-        .set_default("gpu.format", "{vendor} {model} ({vram})")
++        .set_default("gpu.format", "{vendor} {model}")
+         .unwrap();
+ 
+     builder = builder.set_default("memory.title", "Memory").unwrap();
 diff --git a/src/main.rs b/src/main.rs
 index 4eb4e25..7f3efc6 100644
 --- a/src/main.rs
@@ -671,6 +734,30 @@ index 894f33f..918773b 100644
 -    displays.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 -    Ok(displays)
 -}
+diff --git a/src/modules/gpu.rs b/src/modules/gpu.rs
+index 29f7543..4a8c0b3 100644
+--- a/src/modules/gpu.rs
++++ b/src/modules/gpu.rs
+@@ -147,6 +147,19 @@ pub fn get_gpus(config: &Configuration) -> Result<Vec<GPUInfo>, ModuleError> {
+     let mut gpus: Vec<GPUInfo> = Vec::new();
+     let info_flags: u32 = GPUInfo::gen_info_flags(&config.gpu.format);
+ 
++    if let Ok(raw) = fs::read_to_string("/sys/devices/virtual/mavex/gpu") {
++        let mut lines = raw.lines();
++        let vendor = lines.next().unwrap_or("").trim().to_string();
++        let model = lines.next().unwrap_or("").trim().to_string();
++        if !model.is_empty() {
++            let mut gpu = GPUInfo::new();
++            gpu.vendor = vendor;
++            gpu.model = model;
++            gpus.push(gpu);
++            return Ok(gpus);
++        }
++    }
++
+     if config.gpu.detect_through_driver {
+         match fill_from_drivers(
+             &mut gpus,
 diff --git a/src/modules/localip.rs b/src/modules/localip.rs
 index 54788e9..6bf31aa 100644
 --- a/src/modules/localip.rs
@@ -809,6 +896,19 @@ index a861b5a..433b7ab 100644
      Ok(())
  }
  
+diff --git a/src/modules/shell.rs b/src/modules/shell.rs
+index f3d9678..f8e45fa 100644
+--- a/src/modules/shell.rs
++++ b/src/modules/shell.rs
+@@ -121,6 +121,8 @@ const SHELL_INFOFLAG_VERSION: u32 = 4;
+ // This prevents stuff like sudo, scripts or running crabfetch as a child
+ // process in any way messing us up Compiled from info here https://wiki.archlinux.org/title/Command-line_shell
+ pub const KNOWN_SHELLS: &[&str] = &[
++    "brush",
++    "msh",
+     "bash",
+     "dash",
+     "ksh",
 diff --git a/src/modules/swap.rs b/src/modules/swap.rs
 index 72c5360..1d1032d 100644
 --- a/src/modules/swap.rs
@@ -835,7 +935,7 @@ index 36c1d6d..0d288c1 100644
      uptime.uptime = Duration::new(sysinfo_unwrap.uptime as u64, 0);
  }
 diff --git a/src/proccess_info.rs b/src/proccess_info.rs
-index 0b15f45..d054293 100644
+index 0b15f45..0e51ac5 100644
 --- a/src/proccess_info.rs
 +++ b/src/proccess_info.rs
 @@ -3,7 +3,6 @@
@@ -855,3 +955,12 @@ index 0b15f45..d054293 100644
      }
  
      pub fn is_valid(&self) -> bool {
+@@ -73,7 +72,7 @@ impl ProcessInfo {
+         match &self.exe {
+             Some(r) => Ok(r.to_string()),
+             None => {
+-                match fs::canonicalize(self.path.join("exe")) {
++                match fs::read_link(self.path.join("exe")) {
+                     Ok(r) => {
+                         self.exe = Some(r.display().to_string());
+                         if work_around_python && self.exe.as_ref().unwrap().contains("python") {

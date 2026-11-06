@@ -142,6 +142,17 @@ pub extern "C" fn k_set_hostinfo(mem_total_kib: u32, mem_used_kib: u32, ncpu: u3
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn k_set_gpu(p: *const u8, n: usize) {
+    let text = str_arg(p, n).to_string();
+    with_sys(|s| {
+        for d in ["/sys", "/sys/devices", "/sys/devices/virtual", "/sys/devices/virtual/mavex"] {
+            let _ = s.vfs.mkdir(d, 0o555);
+        }
+        let _ = s.vfs.write_file("/sys/devices/virtual/mavex/gpu", text.as_bytes());
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn k_unlink(p: *const u8, n: usize) -> i32 {
     let path = str_arg(p, n);
     with_sys(|s| ret(s.vfs.unlink(path)))
@@ -612,7 +623,7 @@ pub extern "C" fn kmain() {
         }
         v.chmod("/tmp", 0o1777).unwrap();
         v.write_file("/etc/hostname", b"mavex\n").unwrap();
-        v.write_file("/etc/os-release", format!("NAME=\"MavexOS\"\nPRETTY_NAME=\"MavexOS {0}\"\nVERSION=\"{0}\"\nVERSION_ID=\"{0}\"\nID=mavexos\nHOME_URL=\"https://github.com/MavexOS\"\n", ver).as_bytes()).unwrap();
+        v.write_file("/etc/os-release", format!("NAME=\"MavexOS\"\nPRETTY_NAME=\"MavexOS\"\nVERSION=\"{0}\"\nVERSION_ID=\"{0}\"\nID=mavexos\nHOME_URL=\"https://github.com/MavexOS\"\n", ver).as_bytes()).unwrap();
         v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
         v.chown("/home/user", 1000, 1000).unwrap();
         v.mkdir("/root", 0o700).unwrap();
