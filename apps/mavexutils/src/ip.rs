@@ -36,7 +36,7 @@ fn flags(l: &Link) -> String {
     if l.up { f.push("UP"); f.push("LOWER_UP"); }
     f.join(",")
 }
-fn state(l: &Link) -> &'static str { if !l.up { "DOWN" } else if l.kind == "loopback" || l.kind == "dummy" { "UNKNOWN" } else { "UP" } }
+fn state(l: &Link) -> &'static str { if !l.up { "DOWN" } else if l.kind == "loopback" || l.kind == "dummy" || l.kind == "wireguard" { "UNKNOWN" } else { "UP" } }
 fn j(s: &str) -> String { s.replace('\\', "\\\\").replace('"', "\\\"") }
 
 fn link_lines(l: &Link) -> String {

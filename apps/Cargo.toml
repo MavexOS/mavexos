@@ -11,3 +11,4 @@ strip = true
 
 [patch.crates-io]
 brush-core = { path = "vendor/brush-core" }
+boringtun = { path = "vendor/boringtun" }

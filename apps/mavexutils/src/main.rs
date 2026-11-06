@@ -4,6 +4,7 @@
 mod ip;
 mod sysutils;
 mod top;
+mod wg;
 
 use std::process::exit;
 
@@ -434,6 +435,8 @@ fn main() {
         "sudo" => cmd_sudo(&args),
         "su" => cmd_su(&args),
         "ip" => ip::main(&args),
+        "wg" => wg::wg(&args),
+        "wg-quick" => wg::wg_quick(&args),
         "uname" => sysutils::uname(&args),
         "hostname" => sysutils::hostname(&args),
         "clear" => sysutils::clear(),

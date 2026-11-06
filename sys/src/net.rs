@@ -128,7 +128,8 @@ impl Net {
                 Ok(String::new())
             }
             "link-add" if w.len() >= 3 => {
-                if w[2] != "dummy" {
+                let kind: &'static str = match w[2] { "dummy" => "dummy", "wireguard" => "wireguard", _ => "" };
+                if kind.is_empty() {
                     return Err((-95, format!("Error: Unknown device type \"{}\"", w[2])));
                 }
                 if self.ifaces.iter().any(|i| i.name == w[1]) {
@@ -136,7 +137,7 @@ impl Net {
                 }
                 let index = self.next_index;
                 self.next_index += 1;
-                self.ifaces.push(Iface { index, name: w[1].into(), up: false, mtu: 1500, kind: "dummy", mac: Self::mac_for(index), addrs: vec![] });
+                self.ifaces.push(Iface { index, name: w[1].into(), up: false, mtu: if kind == "wireguard" { 1420 } else { 1500 }, kind, mac: Self::mac_for(index), addrs: vec![] });
                 Ok(String::new())
             }
             "link-del" if w.len() >= 2 => {
