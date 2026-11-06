@@ -113,6 +113,7 @@ pub struct Sys {
     pub hostinfo: procfs::HostInfo,
     pub tty_out: Vec<u8>,
     pub tty_in: VecDeque<u8>,
+    pub tty_eof: bool,
 }
 
 pub struct DirEnt {
@@ -123,7 +124,7 @@ pub struct DirEnt {
 
 impl Sys {
     pub fn new(vfs: Vfs) -> Self {
-        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), tty_out: Vec::new(), tty_in: VecDeque::new() }
+        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), tty_out: Vec::new(), tty_in: VecDeque::new(), tty_eof: false }
     }
 
     pub fn set_default_creds(&mut self, uid: u32, gid: u32) {
@@ -199,6 +200,21 @@ impl Sys {
             Some(FdKind::PipeR(i)) => self.pipes.get(*i).and_then(|p| p.as_ref()).is_none_or(|p| p.writers == 0),
             _ => true,
         }
+    }
+
+    /// True when a read (or write) on the fd would not block.
+    pub fn fd_ready(&self, pid: u32, fd: u32, write: bool) -> bool {
+        let Some(f) = self.procs.get(&pid).and_then(|p| p.fds.get(&fd)) else { return true };
+        match &f.kind {
+            FdKind::PipeR(i) if !write => self.pipes.get(*i).and_then(|p| p.as_ref()).is_none_or(|p| !p.buf.is_empty() || p.writers == 0),
+            FdKind::PipeW(i) if write => self.pipes.get(*i).and_then(|p| p.as_ref()).is_none_or(|p| p.buf.len() < PIPE_CAP || p.readers == 0),
+            FdKind::Tty if !write => !self.tty_in.is_empty() || self.tty_eof,
+            _ => true,
+        }
+    }
+
+    pub fn proc_exited(&self, pid: u32) -> bool {
+        self.procs.get(&pid).is_none_or(|p| p.exit.is_some())
     }
 
     pub fn proc_cwd(&self, pid: u32) -> Option<String> {
@@ -466,6 +482,12 @@ impl Sys {
             },
             FdKind::PipeW(_) => Err(errno::BADF),
             FdKind::Tty => {
+                if self.tty_in.is_empty() {
+                    if std::mem::take(&mut self.tty_eof) {
+                        return Ok(Vec::new());
+                    }
+                    return Err(errno::AGAIN);
+                }
                 let n = len.min(self.tty_in.len());
                 Ok(self.tty_in.drain(..n).collect())
             }
@@ -490,10 +512,9 @@ impl Sys {
             FdKind::Dir { .. } => Err(errno::ISDIR),
             FdKind::PipeW(id) => match self.pipes.get_mut(id).and_then(|p| p.as_mut()) {
                 Some(p) if p.readers > 0 => {
-                    // Run-to-completion has no blocking, so a full pipe acts like SIGPIPE: `yes | head` terminates.
                     let room = PIPE_CAP.saturating_sub(p.buf.len());
                     if room == 0 && !data.is_empty() {
-                        return Err(errno::PIPE);
+                        return Err(errno::AGAIN);
                     }
                     let n = data.len().min(room);
                     p.buf.extend(&data[..n]);

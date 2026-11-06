@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 const b = await chromium.launch(); const p = await b.newPage();
-p.on("pageerror", (e) => console.log("PAGEERR", e.message));
+p.on("pageerror", (e) => console.log("PAGEERR", e.message)); p.on("console", (m) => console.log("CON", m.text()));
 await p.goto(pathToFileURL(resolve("../dist/index.html")).href + "#fast");
 await p.waitForFunction(() => window.mavexReady, null, { timeout: 15000 });
 for (const l of process.argv.slice(2)) { await p.keyboard.type(l); await p.keyboard.press("Enter"); }

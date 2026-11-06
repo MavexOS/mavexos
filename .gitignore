@@ -2,3 +2,4 @@
 /dist
 /apps/target
 .scratch/
+/tools/node_modules

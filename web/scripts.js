@@ -53,7 +53,7 @@ const sys = {
   readdir: (path) => withStr(path, (p, n) => { const r = K.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
   shellRun: (line) => {
     if (!useBrush) return withStr(line, (p, n) => staged(K.k_shell_run(p, n)));
-    const r = R.brushRun(line); brushExited = r.exited; return r.out;
+    return R.brushRun(line).then((r) => { brushExited = r.exited; return r.out; });
   },
   prompt: () => (useBrush ? R.brushPrompt() : staged(K.k_shell_prompt())),
   complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
@@ -90,13 +90,33 @@ function commitInput(extra) {
   write(promptText); // colored prompt echo
   write(buf + (extra || "") + "\n");
 }
-function enter() {
+let running = false;
+const feed = (str) => { const b = enc.encode(str), [p, n] = put(b); try { K.k_tty_input(p, n); } finally { K.k_free(p, n); } R.pump(); };
+const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~" };
+function rawKey(e) {
+  const k = e.key;
+  if (e.ctrlKey && !e.altKey && !e.metaKey && k.length === 1) {
+    const l = k.toLowerCase();
+    if (l === "c") { e.preventDefault(); R.killForeground(); return; }
+    if (l >= "a" && l <= "z") { e.preventDefault(); feed(String.fromCharCode(l.charCodeAt(0) - 96)); return; }
+    return;
+  }
+  if (e.metaKey) return;
+  if (RAW_KEYS[k]) { e.preventDefault(); feed(RAW_KEYS[k]); return; }
+  if (k.length === 1) { e.preventDefault(); feed(k); }
+}
+async function runLine(line) {
+  running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
+  try { write(await sys.shellRun(line)); } finally { running = false; R.S.rawTty = false; }
+}
+async function enter() {
   const line = buf;
+  if (running) { write(buf + "\n"); buf = ""; pos = 0; hidx = history.length; renderLine(); feed(line + "\n"); return; }
   live = false;
   if (dead) { write(promptText + "\n"); dead = false; sys.reset(); write("\x1b[0m"); newPrompt(); return; }
   commitInput();
   if (line.trim() && history[history.length - 1] !== line) history.push(line);
-  if (line.trim()) write(sys.shellRun(line));
+  if (line.trim()) await runLine(line);
   if (sys.exited()) { dead = true; write("\n[process completed - press Enter to restart]\n"); promptText = ""; buf = ""; pos = 0; renderPrompt(); renderLine(); live = true; return; }
   newPrompt();
 }
@@ -122,9 +142,12 @@ function insert(s) { buf = buf.slice(0, pos) + s + buf.slice(pos); pos += s.leng
 
 document.addEventListener("keydown", (e) => {
   if (!live) return;
+  if (running && R.S.rawTty) { rawKey(e); return; }
   const k = e.key;
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
     const l = k.toLowerCase();
+    if (l === "c" && running && !(window.getSelection().toString())) { e.preventDefault(); write(buf + "^C\n"); buf = ""; pos = 0; renderLine(); R.killForeground(); return; }
+    if (l === "d" && running) { e.preventDefault(); if (!buf.length) { K.k_tty_eof(); R.pump(); } return; }
     if (l === "c" && !(window.getSelection().toString())) { e.preventDefault(); write(promptText); write(buf + "^C\n"); newPrompt(); return; }
     if (l === "c") return;
     if (l === "v") return;
@@ -178,6 +201,7 @@ async function boot() {
   showLine(false);
   const rt = await R.boot(window.MAVEX_KERNEL_B64);
   K = rt.x;
+  R.S.onOutput = write;
   const coreutils = R.registerModule("coreutils", window.MAVEX_COREUTILS_B64);
   const brushMod = R.registerModule("brush", window.MAVEX_BRUSH_B64);
   const mxu = R.registerModule("mavexutils", window.MAVEX_MAVEXUTILS_B64);

@@ -323,6 +323,32 @@ pub extern "C" fn k_fd_dup(pid: u32, fd: u32) -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn k_fd_ready(pid: u32, fd: u32, write: u32) -> i32 {
+    with_sys(|s| s.fd_ready(pid, fd, write != 0)) as i32
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_exited(pid: u32) -> i32 {
+    with_sys(|s| s.proc_exited(pid)) as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_tty_input(p: *const u8, n: usize) {
+    let data = std::slice::from_raw_parts(p, n);
+    with_sys(|s| s.tty_in.extend(data));
+}
+
+#[no_mangle]
+pub extern "C" fn k_tty_eof() {
+    with_sys(|s| s.tty_eof = true);
+}
+
+#[no_mangle]
+pub extern "C" fn k_tty_flush_input() {
+    with_sys(|s| { s.tty_in.clear(); s.tty_eof = false; });
+}
+
+#[no_mangle]
 pub extern "C" fn k_proc_ready(pid: u32) -> i32 {
     with_sys(|s| s.proc_ready(pid)) as i32
 }
