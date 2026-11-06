@@ -653,6 +653,7 @@ pub extern "C" fn kmain() {
         v.chmod("/etc/shadow", 0o600).unwrap();
         v.write_file("/etc/sudoers", b"# MavexOS sudoers (no password prompts: ttys cannot block yet)\nroot ALL=(ALL) ALL\n%sudo ALL=(ALL) NOPASSWD: ALL\n").unwrap();
         v.chmod("/etc/sudoers", 0o440).unwrap();
+        let _ = v.symlink("/proc/mounts", "/etc/mtab");
         s.hostinfo.boot_ns = s.hostinfo.now_ns;
         s.hostinfo.version = ver.to_string();
         s.hostinfo.mem_total_kib = 4 * 1024 * 1024;

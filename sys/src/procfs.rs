@@ -41,7 +41,10 @@ impl Sys {
             cpu += &format!("processor\t: {i}\nvendor_id\t: MavexOS\nmodel name\t: wasm32 virtual CPU\ncpu MHz\t\t: 1000.000\ncache size\t: 0 KB\ncpu cores\t: {ncpu}\nflags\t\t: wasm32 simd128\n\n");
         }
         w(v, "/proc/cpuinfo", cpu);
-        w(v, "/proc/mounts", "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n".into());
+        w(v, "/proc/mounts", "/dev/mavexfs / mavexfs rw 0 0\nproc /proc proc rw 0 0\n".into());
+        let (bytes, _inodes) = v.usage();
+        let used_kib = bytes.div_ceil(1024).min(total);
+        w(v, "/proc/fsstat", format!("/ {} {}\n", total, total - used_kib));
         let busy = (h.busy_ms / 10).min((up * 100.0) as u64);
         let idle = ((up * 100.0) as u64).saturating_sub(busy);
         w(v, "/proc/stat", format!("cpu  {busy} 0 0 {idle} 0 0 0 0 0 0\nbtime {}\nprocesses {}\nprocs_running 1\n", h.boot_ns / 1_000_000_000, self.next_pid.saturating_sub(1)));

@@ -178,10 +178,11 @@ async function runBrush(name, type) {
   if (!/\nactive\ninactive\nactive\n/.test(t.replace(/\n+/g, "\n"))) fails.push("systemctl start/stop cycle");
   if (!/Shell > brush/.test(t)) fails.push("crabfetch finds shell via /proc/self ppid");
   if (!t.includes("mavex-init")) fails.push("crabfetch names init system");
+  if (!/Disk \(\/\) > [0-9.]+ [KMG]?B used of [0-9.]+ [KMG]B/.test(t)) fails.push("crabfetch disk space");
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.8\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.9\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   if (errs.length) fails.push("pageerror: " + errs.join("; "));
   console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (brush)`, fails.length ? fails : "");

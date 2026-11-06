@@ -239,6 +239,20 @@ impl Vfs {
     }
 
 
+    /// Bytes stored in regular files and symlinks, and live inode count (excludes /proc, which is regenerated).
+    pub fn usage(&self) -> (u64, u64) {
+        let (mut bytes, mut inodes) = (0u64, 0u64);
+        for n in self.nodes.iter().flatten() {
+            inodes += 1;
+            match &n.data {
+                Data::File(d) => bytes += d.len() as u64,
+                Data::Symlink(t) => bytes += t.len() as u64,
+                _ => {}
+            }
+        }
+        (bytes, inodes)
+    }
+
     pub fn set_time(&mut self, ns: u64) {
         self.now = ns;
     }
