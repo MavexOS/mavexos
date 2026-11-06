@@ -3,6 +3,7 @@
 //! of an iproute2-compatible subset over the kernel's virtual netns (netlink-like requests).
 mod ip;
 mod sysutils;
+mod top;
 
 use std::process::exit;
 
@@ -440,6 +441,7 @@ fn main() {
         "free" => sysutils::free(&args),
         "nproc" => sysutils::nproc(),
         "which" => sysutils::which(&args),
+        "top" | "htop" => top::run(&name, &args),
         _ => { eprintln!("mavexutils: unknown applet '{name}'"); 127 }
     };
     exit(rc);

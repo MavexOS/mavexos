@@ -13,3 +13,5 @@ pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
 .c94{color:#7cc0ff}.c95{color:#d68fee}.c96{color:#6fd0dc}.c97{color:#fff}
 
 .g40{background:#4c566a}.g41{background:#e06c75}.g42{background:#98c379}.g43{background:#e5c07b}.g44{background:#61afef}.g45{background:#c678dd}.g46{background:#56b6c2}.g47{background:#c8d3e0}.g100{background:#6b7689}.g101{background:#ff7b86}.g102{background:#b5e890}.g103{background:#f0d08c}.g104{background:#7cc0ff}.g105{background:#d68fee}.g106{background:#6fd0dc}.g107{background:#fff}
+
+#alt{display:none;position:fixed;inset:0;box-sizing:border-box;padding:12px;margin:0;overflow:hidden;white-space:pre;word-break:normal;background:#0b0e14;color:#c8d3e0;cursor:text;font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}

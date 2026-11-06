@@ -17,7 +17,7 @@ afy apps/target/wasm32-wasip1/release/brush.wasm
 afy apps/target/wasm32-wasip1/release/mavexutils.wasm
 afy .scratch/ext/rg.wasm
 afy .scratch/ext/init.wasm
-cp web/index.html web/styles.css web/scripts.js web/wasi.js dist/
+cp web/index.html web/styles.css web/scripts.js web/wasi.js web/vt.js dist/
 python3 - <<'PY'
 import base64, re
 def blob(path, var, extra=""):

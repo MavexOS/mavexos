@@ -249,6 +249,16 @@ pub extern "C" fn k_tty_take() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn k_set_proc_stat(pid: u32, cpu_ms: f64, rss_kib: u32, state: u32) {
+    with_sys(|s| s.set_proc_stat(pid, cpu_ms as u64, rss_kib as u64, state as u8))
+}
+
+#[no_mangle]
+pub extern "C" fn k_set_busy(ms: f64) {
+    with_sys(|s| s.hostinfo.busy_ms = ms as u64)
+}
+
+#[no_mangle]
 pub extern "C" fn k_proc_ppid(pid: u32) -> i32 {
     with_sys(|s| s.proc_ppid(pid).map_or(-1, |p| p as i32))
 }

@@ -30,11 +30,12 @@ function ansiToNodes(text) {
   }
   emit(text.slice(last));
 }
-function write(text) { ansiToNodes(text); scrollDown(); }
+function write(text) { text = vt.process(text); if (text) { ansiToNodes(text); scrollDown(); } }
 function scrollDown() { screenEl.scrollTop = screenEl.scrollHeight; }
 
 /* ---------- kernel ---------- */
 const R = window.MavexRuntime;
+const vt = window.MavexVT; vt.init($("alt"));
 let K, mem;
 const enc = new TextEncoder(), dec = new TextDecoder();
 const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(K.memory.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
@@ -91,6 +92,7 @@ function commitInput(extra) {
   write(buf + (extra || "") + "\n");
 }
 let running = false;
+vt.onReply = (s) => feed(s);
 const feed = (str) => { const b = enc.encode(str), [p, n] = put(b); try { K.k_tty_input(p, n); } finally { K.k_free(p, n); } R.pump(); };
 const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~" };
 function rawKey(e) {
@@ -107,7 +109,7 @@ function rawKey(e) {
 }
 async function runLine(line) {
   running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
-  try { write(await sys.shellRun(line)); } finally { running = false; R.S.rawTty = false; }
+  try { write(await sys.shellRun(line)); } finally { running = false; R.S.rawTty = false; vt.leave(); }
 }
 async function enter() {
   const line = buf;
@@ -182,7 +184,7 @@ document.addEventListener("paste", (e) => {
   const parts = text.replace(/\r/g, "").split("\n");
   parts.forEach((p, i) => { insert(p); if (i < parts.length - 1) enter(); });
 });
-screenEl.addEventListener("click", () => { if (!window.getSelection().toString()) $("sink").focus(); });
+for (const el of [screenEl, $("alt")]) el.addEventListener("click", () => { if (!window.getSelection().toString()) $("sink").focus(); });
 $("sink").addEventListener("input", (e) => { const v = e.target.value; e.target.value = ""; if (live && v) insert(v.replace(/\n/g, "")); });
 
 /* ---------- terminal size ---------- */
@@ -193,6 +195,9 @@ function fitCols() {
   const cw = probe.getBoundingClientRect().width / 100; out.removeChild(probe);
   const w = screenEl.clientWidth - 24;
   if (cw > 0 && K) K.k_tty_resize(Math.max(20, Math.floor(w / cw)));
+  const lh = parseFloat(getComputedStyle(screenEl).lineHeight) || 19;
+  const cols = Math.max(20, Math.floor(w / cw)), rows = Math.max(5, Math.floor((window.innerHeight - 24) / lh));
+  R.S.cols = cols; R.S.rows = rows; vt.resize(cols, rows);
 }
 window.addEventListener("resize", fitCols);
 
@@ -237,9 +242,9 @@ async function boot() {
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop"]);
   R.install("rg", []);
-  R.install("crabfetch", ["crab-fetch"]);
+  R.install("crabfetch", []);
   R.install("init", ["systemctl", "journalctl"]);
   R.installSetuid("mavexutils", ["sudo", "su"]);
   R.startInit();

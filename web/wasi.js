@@ -44,7 +44,7 @@
 
   /* ---- Asyncify scheduler: tasks suspend inside blocking imports and are resumed by pump() ---- */
   const AGAIN = 6, EPIPE = 64, AS_UNWIND = 1, AS_REWIND = 2, ASYNC_BUF = 1 << 20;
-  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false };
+  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false, cols: 80, rows: 24, busy: 0 };
   const canBlock = (t) => !!t && !t.sync && t.asyncify;
   // Called first in every blockable import: finishes a pending rewind so the import can retry for real.
   function rewound(t) {
@@ -60,11 +60,20 @@
     ex.asyncify_start_unwind(t.data);
     return 0;
   }
-  function makeTask(pid, sync) { return { pid, sync, inst: null, asyncify: false, data: 0, blocked: false, rewinding: false, waitCond: null, wakeAt: 0, entry: null, done: true, onFinish: null, shell: false, killed: false, daemon: false, killCode: 130 }; }
+  function makeTask(pid, sync) { return { pid, sync, inst: null, asyncify: false, data: 0, blocked: false, rewinding: false, waitCond: null, wakeAt: 0, entry: null, done: true, onFinish: null, shell: false, killed: false, daemon: false, killCode: 130, cpu: 0 }; }
+  function syncStats() {
+    for (const t of S.tasks.values()) {
+      let rss = 0; try { rss = Math.round(t.inst.exports.memory.buffer.byteLength / 1024); } catch (e) {}
+      K.x.k_set_proc_stat(t.pid, t.cpu, rss, t.blocked ? 83 : 82);
+    }
+    K.x.k_set_busy(S.busy);
+  }
   function attach(t, inst) { t.inst = inst; t.asyncify = typeof inst.exports.asyncify_get_state === "function"; }
   function launch(t, entry, onFinish) { t.entry = entry; t.onFinish = onFinish; t.done = false; t.blocked = false; t.rewinding = false; S.tasks.set(t.pid, t); }
   function stepTask(t) {
+    syncStats();
     const prev = S.cur; S.cur = t;
+    const t0 = performance.now();
     let code = 0, finished = true;
     try {
       if (t.rewinding) { t.rewinding = false; t.inst.exports.asyncify_start_rewind(t.data); }
@@ -76,7 +85,7 @@
         code = 134;
         const [[p, n]] = packed("mavexos: program trapped: " + (e && e.message || e) + "\n"); K.x.k_fd_write(t.pid, 2, p, n);
       }
-    } finally { S.cur = prev; }
+    } finally { S.cur = prev; const dt = performance.now() - t0; t.cpu += dt; S.busy += dt; }
     if (t.asyncify && t.inst.exports.asyncify_get_state() === AS_UNWIND) { t.inst.exports.asyncify_stop_unwind(); t.blocked = true; t.rewinding = true; finished = false; }
     if (finished) { t.done = true; t.blocked = false; S.tasks.delete(t.pid); if (t.onFinish) t.onFinish(code); }
   }
@@ -352,6 +361,7 @@
         for (const t of S.tasks.values()) if (under(t.pid)) { t.killed = true; t.killCode = 128 + (sig || 15); }
         pump(); return 0;
       },
+      tty_size(out) { const d = dv(); d.setUint32(out, S.cols, true); d.setUint32(out + 4, S.rows, true); return 0; },
       tty_raw(on) { S.rawTty = !!on; if (S.onTtyMode) S.onTtyMode(S.rawTty); return 0; },
       dup: (fd) => K.x.k_fd_dup(pid, fd),
       park() { throw new ParkSignal(); },

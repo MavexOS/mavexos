@@ -100,6 +100,10 @@ pub struct Proc {
     pub gid: u32,
     pub euid: u32,
     pub egid: u32,
+    pub cpu_ms: u64,
+    pub rss_kib: u64,
+    pub state: u8,
+    pub start_ms: u64,
     fds: BTreeMap<u32, Fd>,
 }
 
@@ -234,6 +238,14 @@ impl Sys {
         self.procs.get(&pid).map(|p| p.cwd.clone())
     }
 
+    pub fn set_proc_stat(&mut self, pid: u32, cpu_ms: u64, rss_kib: u64, state: u8) {
+        if let Some(p) = self.procs.get_mut(&pid) {
+            p.cpu_ms = cpu_ms;
+            p.rss_kib = rss_kib;
+            p.state = state;
+        }
+    }
+
     pub fn proc_count(&self) -> usize {
         self.procs.len()
     }
@@ -325,7 +337,7 @@ impl Sys {
             }
         }
         self.next_pid += 1;
-        self.procs.insert(pid, Proc { ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, fds: BTreeMap::new() });
+        self.procs.insert(pid, Proc { ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, cpu_ms: 0, rss_kib: 0, state: b'R', start_ms: self.hostinfo.now_ns / 1_000_000, fds: BTreeMap::new() });
         for (i, s) in stdio.iter().enumerate() {
             let kind = match *s {
                 Stdio::Tty => FdKind::Tty,

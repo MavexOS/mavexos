@@ -9,6 +9,7 @@ pub struct HostInfo {
     pub mem_used_kib: u64,
     pub ncpu: u32,
     pub version: String,
+    pub busy_ms: u64,
 }
 
 pub fn is_proc(path: &str) -> bool {
@@ -41,7 +42,9 @@ impl Sys {
         }
         w(v, "/proc/cpuinfo", cpu);
         w(v, "/proc/mounts", "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n".into());
-        w(v, "/proc/stat", format!("cpu  0 0 0 {} 0 0 0 0 0 0\nbtime {}\nprocesses {}\nprocs_running 1\n", (up * 100.0) as u64, h.boot_ns / 1_000_000_000, self.next_pid.saturating_sub(1)));
+        let busy = (h.busy_ms / 10).min((up * 100.0) as u64);
+        let idle = ((up * 100.0) as u64).saturating_sub(busy);
+        w(v, "/proc/stat", format!("cpu  {busy} 0 0 {idle} 0 0 0 0 0 0\nbtime {}\nprocesses {}\nprocs_running 1\n", h.boot_ns / 1_000_000_000, self.next_pid.saturating_sub(1)));
 
         let live: Vec<u32> = self.procs.keys().copied().collect();
         if let Ok(ents) = self.vfs.readdir("/proc") {
@@ -59,9 +62,12 @@ impl Sys {
             let dir = format!("/proc/{pid}");
             let comm = p.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).to_string()).unwrap_or_default();
             let cmdline: Vec<u8> = p.argv.iter().flat_map(|a| a.bytes().chain(std::iter::once(0))).collect();
-            let state = if p.exit.is_some() { 'Z' } else { 'R' };
-            let stat = format!("{pid} ({comm}) {state} {} {pid} {pid} 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0\n", p.ppid);
-            let status = format!("Name:\t{comm}\nState:\t{state}\nPid:\t{pid}\nPPid:\t{}\nUid:\t{}\t{}\t{}\t{}\nGid:\t{}\t{}\t{}\t{}\nThreads:\t1\n", p.ppid, p.uid, p.euid, p.uid, p.euid, p.gid, p.egid, p.gid, p.egid);
+            let state = if p.exit.is_some() { 'Z' } else { p.state as char };
+            let ticks = p.cpu_ms / 10;
+            let start = p.start_ms.saturating_sub(h.boot_ns / 1_000_000) / 10;
+            let rss_pages = p.rss_kib / 4;
+            let stat = format!("{pid} ({comm}) {state} {} {pid} {pid} 0 -1 0 0 0 0 0 {ticks} 0 0 0 20 0 1 0 {start} {} {rss_pages}\n", p.ppid, p.rss_kib * 1024);
+            let status = format!("Name:\t{comm}\nState:\t{state}\nPid:\t{pid}\nPPid:\t{}\nUid:\t{}\t{}\t{}\t{}\nGid:\t{}\t{}\t{}\t{}\nThreads:\t1\nVmSize:\t{rk:>8} kB\nVmRSS:\t{rk:>8} kB\n", p.ppid, p.uid, p.euid, p.uid, p.euid, p.gid, p.egid, p.gid, p.egid, rk = p.rss_kib);
             let (cwd, exe) = (p.cwd.clone(), p.exe.clone());
             let _ = self.vfs.mkdir(&dir, 0o555);
             let _ = self.vfs.write_file(&format!("{dir}/stat"), stat.as_bytes());
