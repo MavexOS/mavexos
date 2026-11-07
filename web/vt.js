@@ -10,10 +10,28 @@
   };
   const DEF = { fg: null, bg: null, b: 0, d: 0, u: 0, r: 0 };
   const blank = (a) => ({ ch: " ", a });
+  // wcwidth-style: 0 for combining marks, 2 for East Asian wide / emoji, else 1.
+  const cw = (cp) => {
+    if (cp < 0x300) return 1;
+    if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x1ab0 && cp <= 0x1aff) || (cp >= 0x1dc0 && cp <= 0x1dff) || (cp >= 0x20d0 && cp <= 0x20ff) || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0xfe20 && cp <= 0xfe2f) || cp === 0x200b || cp === 0x200d) return 0;
+    if ((cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe6f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1f64f) || (cp >= 0x1f900 && cp <= 0x1f9ff) || (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
+    return 1;
+  };
+  const MODES = /\x1b\[\?([0-9;]+)([hl])/g;
   const ENTER = /\x1b\[\?(1049|1047|47)h/, LEAVE = /\x1b\[\?(1049|1047|47)l/;
 
   const vt = {
-    active: false, rows: 24, cols: 80, g: [], cx: 0, cy: 0, a: DEF, saved: null, top: 0, bot: 23, curVis: true, state: 0, buf: "", dirty: false, onReply: null, el: null, esc: "",
+    active: false, rows: 24, cols: 80, g: [], cx: 0, cy: 0, a: DEF, saved: null, top: 0, bot: 23, curVis: true, state: 0, buf: "", dirty: false, onReply: null, el: null, esc: "", mouse: 0, mouseSgr: false, mouseMotion: 0, paste: false, appCursor: false,
+    resetModes() { this.mouse = 0; this.mouseSgr = false; this.mouseMotion = 0; this.paste = false; this.appCursor = false; },
+    setMode(list, on) {
+      for (const m of list.split(";")) {
+        const n = +m;
+        if (n === 1000 || n === 1002 || n === 1003) { this.mouse = on ? n : 0; this.mouseMotion = on ? (n === 1000 ? 0 : n === 1002 ? 1 : 2) : 0; }
+        else if (n === 1006) this.mouseSgr = on;
+        else if (n === 2004) this.paste = on;
+        else if (n === 1) this.appCursor = on;
+      }
+    },
     init(el) { this.el = el; },
     resize(cols, rows) {
       if (cols === this.cols && rows === this.rows && this.g.length) return;
@@ -33,6 +51,7 @@
     },
     /* Splits `text` into the part for the normal scrollback and the part consumed by the grid. Returns the normal part. */
     process(text) {
+      text.replace(MODES, (_, l, f) => { this.setMode(l, f === "h"); return ""; });
       let normal = "";
       while (text) {
         if (!this.active) {
@@ -63,8 +82,11 @@
           if (ch === "\b") { if (this.cx > 0) this.cx--; continue; }
           if (ch === "\t") { this.cx = Math.min(this.cols - 1, (this.cx + 8) & ~7); continue; }
           if (ch < " " || ch === "\x7f") continue;
-          if (this.cx >= this.cols) { this.cx = 0; this.lf(); }
-          this.g[this.cy][this.cx++] = { ch, a: this.a };
+          const w = cw(ch.codePointAt(0));
+          if (w === 0) { const px = this.cx > 0 ? this.cx - 1 : 0; const pc = this.g[this.cy][px]; if (pc && pc.ch) this.g[this.cy][px] = { ch: pc.ch + ch, a: pc.a, w: pc.w }; continue; }
+          if (this.cx + w > this.cols) { this.cx = 0; this.lf(); }
+          this.g[this.cy][this.cx++] = { ch, a: this.a, w };
+          if (w === 2) this.g[this.cy][this.cx++] = { ch: "", a: this.a, w: 0 };
         } else if (this.state === 1) { // after ESC
           if (ch === "[") { this.state = 2; this.esc = ""; }
           else if (ch === "]") { this.state = 3; this.esc = ""; }

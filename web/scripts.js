@@ -106,12 +106,13 @@ function rawKey(e) {
     return;
   }
   if (e.metaKey) return;
+  if (vt.appCursor && /^Arrow|^Home$|^End$/.test(k)) { e.preventDefault(); feed("\x1bO" + { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D", Home: "H", End: "F" }[k]); return; }
   if (RAW_KEYS[k]) { e.preventDefault(); feed(RAW_KEYS[k]); if (R.S.tty.echo && k === "Enter") write("\n"); return; }
   if (k.length === 1) { e.preventDefault(); feed(k); if (R.S.tty.echo) write(k); }
 }
 async function runLine(line) {
   running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
-  try { write(await sys.shellRun(line)); } finally { running = false; R.ttyReset(); vt.leave(); }
+  try { write(await sys.shellRun(line)); } finally { running = false; R.ttyReset(); vt.leave(); vt.resetModes(); }
 }
 async function enter() {
   const line = buf;
@@ -236,6 +237,7 @@ document.addEventListener("paste", (e) => {
   if (!live) return;
   e.preventDefault();
   const text = (e.clipboardData || window.clipboardData).getData("text");
+  if (running && !R.S.tty.icanon) { feed(vt.paste ? "\x1b[200~" + text + "\x1b[201~" : text.replace(/\n/g, "\r")); return; }
   const parts = text.replace(/\r/g, "").split("\n");
   parts.forEach((p, i) => { insert(p); if (i < parts.length - 1) enter(); });
 });
@@ -251,6 +253,7 @@ function fitCols() {
   const w = screenEl.clientWidth - 24;
   if (cw > 0 && K) K.k_tty_resize(Math.max(20, Math.floor(w / cw)));
   const lh = parseFloat(getComputedStyle(screenEl).lineHeight) || 19;
+  vt.cw = cw; vt.lh = lh;
   const cols = Math.max(20, Math.floor(w / cw)), rows = Math.max(5, Math.floor((window.innerHeight - 24) / lh));
   const changed = R.S.cols !== cols || R.S.rows !== rows;
   R.S.cols = cols; R.S.rows = rows; vt.resize(cols, rows);
@@ -356,3 +359,29 @@ async function boot() {
   window.dispatchEvent(new Event("mavex-ready"));
 }
 boot().catch((e) => { write("\n\x1b[1;31mkernel panic: " + e + "\x1b[0m\n"); throw e; });
+
+/* ---------- mouse reporting (xterm 1000/1002/1003, SGR 1006) ---------- */
+{
+  const altEl = $("alt");
+  let down = -1, last = "";
+  const cell = (e) => {
+    const r = altEl.getBoundingClientRect(), cs = getComputedStyle(altEl);
+    const x = Math.floor((e.clientX - r.left - (parseFloat(cs.paddingLeft) || 0)) / (vt.cw || 8)) + 1;
+    const y = Math.floor((e.clientY - r.top - (parseFloat(cs.paddingTop) || 0)) / (vt.lh || 19)) + 1;
+    return [Math.max(1, Math.min(vt.cols, x)), Math.max(1, Math.min(vt.rows, y))];
+  };
+  const report = (b, x, y, release, e) => {
+    b |= (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
+    if (vt.mouseSgr) feed(`\x1b[<${b};${x};${y}${release ? "m" : "M"}`);
+    else feed("\x1b[M" + String.fromCharCode(32 + (release ? 3 : b), 32 + Math.min(x, 223), 32 + Math.min(y, 223)));
+  };
+  const on = () => vt.active && vt.mouse > 0 && running;
+  altEl.addEventListener("mousedown", (e) => { if (!on() || e.button > 2) return; e.preventDefault(); down = e.button; const [x, y] = cell(e); report(e.button === 1 ? 1 : e.button === 2 ? 2 : 0, x, y, false, e); });
+  window.addEventListener("mouseup", (e) => { if (down < 0 || !on()) { down = -1; return; } const [x, y] = cell(e); report(down === 1 ? 1 : down === 2 ? 2 : 0, x, y, true, e); down = -1; });
+  window.addEventListener("mousemove", (e) => {
+    if (!on() || vt.mouseMotion === 0 || (vt.mouseMotion === 1 && down < 0)) return;
+    const [x, y] = cell(e), key = x + "," + y; if (key === last) return; last = key;
+    report(32 + (down < 0 ? 3 : down === 1 ? 1 : down === 2 ? 2 : 0), x, y, false, e);
+  });
+  altEl.addEventListener("wheel", (e) => { if (!on()) return; e.preventDefault(); const [x, y] = cell(e); report(e.deltaY < 0 ? 64 : 65, x, y, false, e); }, { passive: false });
+}
