@@ -674,6 +674,9 @@ pub(crate) fn execute_external_command(
             #[expect(clippy::cast_possible_wrap)]
             let pid = child.id().map(|id| id as i32);
             let mut actual_pgid = process_group_id;
+            if let (Some(pid), Some(cell)) = (&pid, &context.params.bg_pgid) {
+                let _ = cell.compare_exchange(0, *pid, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+            }
             if let Some(pid) = &pid {
                 if new_pg {
                     actual_pgid = Some(*pid);

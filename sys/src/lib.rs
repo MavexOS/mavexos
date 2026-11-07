@@ -21,6 +21,7 @@ pub mod errno {
     pub const NOTEMPTY: u16 = 55;
     pub const PIPE: u16 = 64;
     pub const SPIPE: u16 = 70;
+    pub const SRCH: u16 = 71;
 }
 
 pub mod ftype {
@@ -104,6 +105,8 @@ pub struct Proc {
     pub rss_kib: u64,
     pub state: u8,
     pub start_ms: u64,
+    pub pgid: u32,
+    pub sid: u32,
     fds: BTreeMap<u32, Fd>,
 }
 
@@ -118,6 +121,7 @@ pub struct Sys {
     pub tty_out: Vec<u8>,
     pub tty_in: VecDeque<u8>,
     pub tty_eof: bool,
+    pub tty_fg: u32,
 }
 
 pub struct DirEnt {
@@ -128,7 +132,7 @@ pub struct DirEnt {
 
 impl Sys {
     pub fn new(vfs: Vfs) -> Self {
-        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), tty_out: Vec::new(), tty_in: VecDeque::new(), tty_eof: false }
+        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), tty_out: Vec::new(), tty_in: VecDeque::new(), tty_eof: false, tty_fg: 0 }
     }
 
     pub fn set_default_creds(&mut self, uid: u32, gid: u32) {
@@ -337,7 +341,8 @@ impl Sys {
             }
         }
         self.next_pid += 1;
-        self.procs.insert(pid, Proc { ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, cpu_ms: 0, rss_kib: 0, state: b'R', start_ms: self.hostinfo.now_ns / 1_000_000, fds: BTreeMap::new() });
+        let (pgid, sid) = self.procs.get(&ppid).map_or((pid, pid), |pp| (pp.pgid, pp.sid));
+        self.procs.insert(pid, Proc { pgid, sid, ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, cpu_ms: 0, rss_kib: 0, state: b'R', start_ms: self.hostinfo.now_ns / 1_000_000, fds: BTreeMap::new() });
         for (i, s) in stdio.iter().enumerate() {
             let kind = match *s {
                 Stdio::Tty => FdKind::Tty,
@@ -356,6 +361,37 @@ impl Sys {
         p.fds.insert(3, Fd { kind: FdKind::Dir { path: "/".into() }, preopen: Some("/".into()) });
         p.fds.insert(4, Fd { kind: FdKind::Dir { path: cwd }, preopen: Some(".".into()) });
         Ok(pid)
+    }
+
+    pub fn setpgid(&mut self, pid: u32, pgid: u32) -> R<()> {
+        let pg = if pgid == 0 { pid } else { pgid };
+        let p = self.procs.get_mut(&pid).ok_or(errno::SRCH)?;
+        p.pgid = pg;
+        Ok(())
+    }
+
+    pub fn setsid(&mut self, pid: u32) -> R<u32> {
+        let p = self.procs.get_mut(&pid).ok_or(errno::SRCH)?;
+        p.sid = pid;
+        p.pgid = pid;
+        Ok(pid)
+    }
+
+    pub fn pgid_of(&self, pid: u32) -> Option<u32> {
+        self.procs.get(&pid).map(|p| p.pgid)
+    }
+
+    pub fn sid_of(&self, pid: u32) -> Option<u32> {
+        self.procs.get(&pid).map(|p| p.sid)
+    }
+
+    /// Live (not exited) members of a process group.
+    pub fn group_members(&self, pgid: u32) -> Vec<u32> {
+        self.procs.iter().filter(|(_, p)| p.pgid == pgid && p.exit.is_none()).map(|(k, _)| *k).collect()
+    }
+
+    pub fn children_of(&self, ppid: u32) -> Vec<u32> {
+        self.procs.iter().filter(|(_, p)| p.ppid == ppid).map(|(k, _)| *k).collect()
     }
 
     fn close_all(&mut self, pid: u32) {

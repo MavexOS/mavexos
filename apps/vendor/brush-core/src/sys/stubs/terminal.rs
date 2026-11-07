@@ -47,20 +47,21 @@ pub fn get_parent_process_id() -> Option<sys::process::ProcessId> {
 ///
 /// This is a stub implementation that returns `None`.
 pub fn get_process_group_id() -> Option<sys::process::ProcessId> {
-    None
+    Some(crate::sys::wasm::mavex::get_pgid(0))
 }
 
 /// Get the foreground process ID of the attached terminal.
 ///
 /// This is a stub implementation that returns `None`.
 pub fn get_foreground_pid() -> Option<sys::process::ProcessId> {
-    None
+    Some(crate::sys::wasm::mavex::tc_get_fg())
 }
 
 /// Move the specified process to the foreground of the attached terminal.
 ///
 /// This is a stub implementation that takes no action.
-pub fn move_to_foreground(_pid: sys::process::ProcessId) -> Result<(), error::Error> {
+pub fn move_to_foreground(pid: sys::process::ProcessId) -> Result<(), error::Error> {
+    crate::sys::wasm::mavex::tc_set_fg(pid as u32);
     Ok(())
 }
 
@@ -68,6 +69,8 @@ pub fn move_to_foreground(_pid: sys::process::ProcessId) -> Result<(), error::Er
 ///
 /// This is a stub implementation that returns `None`.
 pub fn move_self_to_foreground() -> Result<(), std::io::Error> {
+    let me = crate::sys::wasm::mavex::get_pgid(0);
+    if me > 0 { crate::sys::wasm::mavex::tc_set_fg(me as u32); }
     Ok(())
 }
 

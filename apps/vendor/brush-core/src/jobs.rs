@@ -260,6 +260,9 @@ pub struct Job {
     /// If available, the process group ID of the job's processes.
     pgid: Option<sys::process::ProcessId>,
 
+    /// Filled in with the pgid once a background job spawns its first process.
+    pub(crate) pgid_cell: Option<std::sync::Arc<std::sync::atomic::AtomicI32>>,
+
     /// The annotation of the job (e.g., current, previous).
     annotation: JobAnnotation,
 
@@ -302,6 +305,7 @@ impl Job {
             id: 0,
             tasks: tasks.into_iter().collect(),
             pgid: None,
+            pgid_cell: None,
             annotation: JobAnnotation::None,
             command_line,
             state,
@@ -344,6 +348,10 @@ impl Job {
         &mut self,
     ) -> Result<Option<Result<ExecutionResult, error::Error>>, error::Error> {
         let mut result: Option<Result<ExecutionResult, error::Error>> = None;
+
+        if matches!(self.state, JobState::Stopped) {
+            return Ok(None);
+        }
 
         tracing::debug!(target: trace_categories::JOBS, "Polling job {} for completion...", self.id);
 
@@ -447,12 +455,17 @@ impl Job {
                 JobTask::Internal(_) => (),
             }
         }
-        None
+        self.cell_pgid()
     }
 
     /// Tries to retrieve the process group ID (PGID) of the job.
     pub fn process_group_id(&self) -> Option<sys::process::ProcessId> {
         // TODO(jobs): Don't assume that the first PID is the PGID.
-        self.pgid.or_else(|| self.representative_pid())
+        self.pgid.or_else(|| self.representative_pid()).or_else(|| self.cell_pgid())
+    }
+
+    fn cell_pgid(&self) -> Option<sys::process::ProcessId> {
+        let v = self.pgid_cell.as_ref()?.load(std::sync::atomic::Ordering::Relaxed);
+        (v > 0).then_some(v)
     }
 }

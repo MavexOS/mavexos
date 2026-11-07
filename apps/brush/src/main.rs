@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 
+mod kill;
 use brush_builtins::{BuiltinSet, ShellBuilderExt};
 use brush_core::{Shell, extensions::DefaultShellExtensions};
 
@@ -18,6 +19,12 @@ fn block<T>(f: impl std::future::Future<Output = T>) -> T {
     RT.with(|r| r.borrow().as_ref().unwrap().block_on(f))
 }
 
+fn drive_jobs() {
+    brush_core::sys::wasm::mavex::set_driving(true);
+    block(async { for _ in 0..32 { tokio::task::yield_now().await; } });
+    brush_core::sys::wasm::mavex::set_driving(false);
+}
+
 fn main() {
     if let Ok(pwd) = std::env::var("PWD") {
         let _ = std::env::set_current_dir(pwd);
@@ -27,6 +34,7 @@ fn main() {
     let shell = block(async {
         Shell::builder()
             .default_builtins(BuiltinSet::BashMode)
+            .builtin("kill", brush_core::builtins::builtin::<kill::KillCommand, brush_core::extensions::DefaultShellExtensions>())
             .interactive(true)
             .profile(brush_core::ProfileLoadBehavior::Skip)
             .rc(brush_core::RcLoadBehavior::Skip)
@@ -110,6 +118,7 @@ pub extern "C" fn brush_run(ptr: i32, len: i32) -> i32 {
         let params = sh.default_exec_params();
         let _ = sh.add_to_history(&line);
         let r = block(sh.run_string(line, &brush_core::SourceInfo::from("<tty>"), &params));
+        drive_jobs();
         match r {
             Ok(res) => {
                 let code: u8 = res.exit_code.into();
@@ -131,6 +140,10 @@ pub extern "C" fn brush_run(ptr: i32, len: i32) -> i32 {
 pub extern "C" fn brush_prompt() -> i32 {
     let s = SH.with(|c| {
         let mut g = c.borrow_mut();
+        drive_jobs();
+        brush_core::sys::wasm::mavex::set_driving(true);
+        let _ = g.as_mut().unwrap().check_for_completed_jobs();
+        brush_core::sys::wasm::mavex::set_driving(false);
         block(g.as_mut().unwrap().compose_prompt()).unwrap_or_else(|_| "$ ".into())
     });
     take_out(s.into_bytes())

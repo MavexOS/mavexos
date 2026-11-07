@@ -1822,7 +1822,7 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
                 Expansion::from(self.shell.options().option_flags())
             }
             brush_parser::word::SpecialParameter::ProcessId => {
-                Expansion::from(std::process::id().to_string())
+                Expansion::from(crate::sys::wasm::mavex::self_pid().to_string())
             }
             brush_parser::word::SpecialParameter::LastBackgroundProcessId => {
                 if let Some(job) = self.shell.jobs().current_job()

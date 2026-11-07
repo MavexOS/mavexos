@@ -32,8 +32,10 @@ impl CommandExt for std::process::Command {
         self
     }
 
-    fn process_group(&mut self, _pgroup: i32) -> &mut Self {
-        // NOTE: no-op.
+    fn process_group(&mut self, pgroup: i32) -> &mut Self {
+        #[cfg(target_os = "wasi")]
+        crate::sys::wasm::mavex::set_pg_spec(pgroup);
+        let _ = pgroup;
         self
     }
 }
@@ -86,7 +88,8 @@ pub trait CommandFgControlExt {
 
 impl CommandFgControlExt for std::process::Command {
     fn take_foreground(&mut self) {
-        // NOTE: This is a no-op.
+        #[cfg(target_os = "wasi")]
+        crate::sys::wasm::mavex::set_take_fg();
     }
 
     fn lead_session(&mut self) {

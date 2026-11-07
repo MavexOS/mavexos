@@ -1846,6 +1846,7 @@ dependencies = [
  "brush-builtins",
  "brush-core",
  "brush-parser",
+ "clap",
  "tokio",
 ]
 
@@ -1893,7 +1894,7 @@ version = "0.0.2"
 
 [[package]]
 name = "mavex-utils"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "base64",
  "boringtun",

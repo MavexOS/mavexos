@@ -8,7 +8,7 @@ const F = binaryen.Features;
 m.setFeatures(F.MVP | F.MutableGlobals | F.NontrappingFPToInt | F.SignExt | F.BulkMemory | F.BulkMemoryOpt | F.CallIndirectOverlong | F.Multivalue | F.ReferenceTypes | F.SIMD128 | F.Atomics | F.ExtendedConst);
 binaryen.setPassArgument("asyncify-imports", [
   "wasi_snapshot_preview1.fd_read", "wasi_snapshot_preview1.fd_write", "wasi_snapshot_preview1.poll_oneoff",
-  "wasi_snapshot_preview1.sched_yield", "mavex.wait",
+  "wasi_snapshot_preview1.sched_yield", "mavex.wait", "mavex.wait_change",
 ].join(","));
 m.runPasses(["asyncify"]);
 writeFileSync(out, m.emitBinary());

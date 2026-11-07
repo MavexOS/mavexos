@@ -37,6 +37,8 @@ pub struct ExecutionParameters {
     /// Whether `errexit` (exit on error) behavior should be
     /// suppressed in this execution context. Defaults to `false`.
     pub suppress_errexit: bool,
+    /// Records the pgid of the first process spawned by a background job.
+    pub(crate) bg_pgid: Option<std::sync::Arc<std::sync::atomic::AtomicI32>>,
 }
 
 impl ExecutionParameters {
@@ -290,17 +292,23 @@ fn spawn_async_ao_list_in_task<'a, SE: extensions::ShellExtensions>(
         cloned_params.set_fd(openfiles::OpenFiles::STDIN_FD, null);
     }
 
+    let pgid_cell = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    cloned_params.bg_pgid = Some(pgid_cell.clone());
+    cloned_params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
+
     let join_handle = tokio::spawn(async move {
         cloned_ao_list
             .execute(&mut cloned_shell, &cloned_params)
             .await
     });
 
-    shell.jobs_mut().add_as_current(jobs::Job::new(
+    let mut job = jobs::Job::new(
         [jobs::JobTask::Internal(join_handle)],
         ao_list.to_string(),
         jobs::JobState::Running,
-    ))
+    );
+    job.pgid_cell = Some(pgid_cell);
+    shell.jobs_mut().add_as_current(job)
 }
 
 #[async_trait::async_trait]

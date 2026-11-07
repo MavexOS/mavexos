@@ -13,7 +13,7 @@ pub(crate) mod windows;
 pub(crate) use windows as platform;
 
 #[cfg(target_family = "wasm")]
-pub(crate) mod wasm;
+pub mod wasm;
 #[cfg(target_family = "wasm")]
 pub(crate) use wasm as platform;
 

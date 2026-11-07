@@ -682,3 +682,47 @@ pub extern "C" fn kmain() {
     print("[ ok ] process layer: pid table, fds, pipes, tty ready\n");
     print("[ ok ] created /home/user (uid 1000)\n");
 }
+
+#[no_mangle]
+pub extern "C" fn k_setpgid(pid: u32, pgid: u32) -> i32 {
+    with_sys(|s| wr(s.setpgid(pid, pgid), |_| 0))
+}
+
+#[no_mangle]
+pub extern "C" fn k_setsid(pid: u32) -> i32 {
+    with_sys(|s| wr(s.setsid(pid), |v| v as i32))
+}
+
+#[no_mangle]
+pub extern "C" fn k_getpgid(pid: u32) -> i32 {
+    with_sys(|s| s.pgid_of(pid).map_or(-1, |v| v as i32))
+}
+
+#[no_mangle]
+pub extern "C" fn k_getsid(pid: u32) -> i32 {
+    with_sys(|s| s.sid_of(pid).map_or(-1, |v| v as i32))
+}
+
+#[no_mangle]
+pub extern "C" fn k_tty_set_fg(pgid: u32) {
+    with_sys(|s| s.tty_fg = pgid)
+}
+
+#[no_mangle]
+pub extern "C" fn k_tty_get_fg() -> i32 {
+    with_sys(|s| s.tty_fg as i32)
+}
+
+fn u32_list(v: Vec<u32>) -> i32 {
+    stage(v.into_iter().flat_map(|x| x.to_le_bytes()).collect())
+}
+
+#[no_mangle]
+pub extern "C" fn k_pgrp_members(pgid: u32) -> i32 {
+    with_sys(|s| u32_list(s.group_members(pgid)))
+}
+
+#[no_mangle]
+pub extern "C" fn k_children(ppid: u32) -> i32 {
+    with_sys(|s| u32_list(s.children_of(ppid)))
+}

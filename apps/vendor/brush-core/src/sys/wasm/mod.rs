@@ -5,7 +5,7 @@ pub use crate::sys::stubs::fd;
 pub(crate) mod fs;
 pub use crate::sys::stubs::input;
 pub(crate) use crate::sys::stubs::network;
-pub(crate) mod mavex;
+pub mod mavex;
 pub(crate) mod pipes {
     pub(crate) use super::mavex::{PipeReader, PipeWriter};
     pub(crate) fn pipe() -> std::io::Result<(PipeReader, PipeWriter)> { super::mavex::make_pipe() }

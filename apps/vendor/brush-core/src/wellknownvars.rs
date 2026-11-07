@@ -83,7 +83,7 @@ pub(crate) fn init_well_known_vars(
     #[cfg(not(target_family = "wasm"))]
     {
         let mut bashpid_var =
-            ShellVariable::new(ShellValue::String(std::process::id().to_string()));
+            ShellVariable::new(ShellValue::String(crate::sys::wasm::mavex::self_pid().to_string()));
         bashpid_var.treat_as_integer();
         shell.env_mut().set_global("BASHPID", bashpid_var)?;
     }

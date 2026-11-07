@@ -44,7 +44,7 @@
 
   /* ---- Asyncify scheduler: tasks suspend inside blocking imports and are resumed by pump() ---- */
   const AGAIN = 6, EPIPE = 64, AS_UNWIND = 1, AS_REWIND = 2, ASYNC_BUF = 1 << 20;
-  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false, cols: 80, rows: 24, busy: 0 };
+  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false, cols: 80, rows: 24, busy: 0, gen: 0 };
   const canBlock = (t) => !!t && !t.sync && t.asyncify;
   // Called first in every blockable import: finishes a pending rewind so the import can retry for real.
   function rewound(t) {
@@ -60,11 +60,11 @@
     ex.asyncify_start_unwind(t.data);
     return 0;
   }
-  function makeTask(pid, sync) { return { pid, sync, inst: null, asyncify: false, data: 0, blocked: false, rewinding: false, waitCond: null, wakeAt: 0, entry: null, done: true, onFinish: null, shell: false, killed: false, daemon: false, killCode: 130, cpu: 0 }; }
+  function makeTask(pid, sync) { return { pid, sync, inst: null, asyncify: false, data: 0, blocked: false, rewinding: false, waitCond: null, wakeAt: 0, entry: null, done: true, onFinish: null, shell: false, killed: false, daemon: false, killCode: 130, cpu: 0, stopped: false, sigPending: 0, sigIgnore: 0 }; }
   function syncStats() {
     for (const t of S.tasks.values()) {
       let rss = 0; try { rss = Math.round(t.inst.exports.memory.buffer.byteLength / 1024); } catch (e) {}
-      K.x.k_set_proc_stat(t.pid, t.cpu, rss, t.blocked ? 83 : 82);
+      K.x.k_set_proc_stat(t.pid, t.cpu, rss, t.stopped ? 84 : t.blocked ? 83 : 82);
     }
     K.x.k_set_busy(S.busy);
   }
@@ -87,7 +87,7 @@
       }
     } finally { S.cur = prev; const dt = performance.now() - t0; t.cpu += dt; S.busy += dt; }
     if (t.asyncify && t.inst.exports.asyncify_get_state() === AS_UNWIND) { t.inst.exports.asyncify_stop_unwind(); t.blocked = true; t.rewinding = true; finished = false; }
-    if (finished) { t.done = true; t.blocked = false; S.tasks.delete(t.pid); if (t.onFinish) t.onFinish(code); }
+    if (finished) { t.done = true; t.blocked = false; S.tasks.delete(t.pid); S.gen++; if (t.onFinish) t.onFinish(code); }
   }
   function flushOutput() { const n = K.x.k_tty_take(); if (n && S.onOutput) S.onOutput(stagedStr(n)); }
   function pump() {
@@ -101,7 +101,8 @@
         progressed = false;
         for (const t of [...S.tasks.values()]) {
           if (t.done) continue;
-          if (t.killed) { t.done = true; S.tasks.delete(t.pid); K.x.k_proc_exit(t.pid, t.killCode); if (t.onFinish) t.onFinish(t.killCode); progressed = true; continue; }
+          if (t.killed) { t.done = true; S.tasks.delete(t.pid); S.gen++; K.x.k_proc_exit(t.pid, t.killCode); if (t.onFinish) t.onFinish(t.killCode); progressed = true; continue; }
+          if (t.stopped) continue;
           if (t.blocked && !t.waitCond()) continue;
           t.blocked = false; progressed = true; stepTask(t);
         }
@@ -112,11 +113,41 @@
     clearTimeout(S.timer);
     if (more) { S.timer = setTimeout(pump, 0); return; }
     let next = Infinity;
-    for (const t of S.tasks.values()) if (t.blocked && t.wakeAt) next = Math.min(next, t.wakeAt);
+    for (const t of S.tasks.values()) if (t.blocked && !t.stopped && t.wakeAt) next = Math.min(next, t.wakeAt);
     if (next < Infinity) S.timer = setTimeout(pump, Math.max(0, next - performance.now()));
     if (S.onIdle) S.onIdle();
   }
-  function killForeground() { for (const t of S.tasks.values()) if (!t.shell && !t.daemon) t.killed = true; pump(); }
+  /* ---- signals: Linux numbering; default actions are terminate / stop / continue / ignore ---- */
+  const SIG = { HUP: 1, INT: 2, QUIT: 3, ABRT: 6, KILL: 9, USR1: 10, SEGV: 11, USR2: 12, PIPE: 13, ALRM: 14, TERM: 15, CHLD: 17, CONT: 18, STOP: 19, TSTP: 20, TTIN: 21, TTOU: 22, URG: 23, WINCH: 28 };
+  const IGNORED_BY_DEFAULT = new Set([SIG.CHLD, SIG.URG, SIG.WINCH]);
+  const STOPPING = new Set([SIG.STOP, SIG.TSTP, SIG.TTIN, SIG.TTOU]);
+  function deliver(t, sig) {
+    if (!sig || t.done) return;
+    const bit = 1 << (sig - 1);
+    if (sig === SIG.KILL) { t.killed = true; t.killCode = 137; t.stopped = false; S.gen++; return; }
+    if (sig === SIG.CONT) { const was = t.stopped; t.stopped = false; t.sigPending |= bit; if (was) S.gen++; return; }
+    if (sig === SIG.STOP) { t.stopped = true; S.gen++; return; }
+    if (t.sigIgnore & bit) return;
+    if (t.shell) { t.sigPending |= bit; if (STOPPING.has(sig) || IGNORED_BY_DEFAULT.has(sig) || sig === SIG.INT || sig === SIG.TERM || sig === SIG.HUP || sig === SIG.QUIT) return; t.killed = true; t.killCode = 128 + sig; S.gen++; return; }
+    if (STOPPING.has(sig)) { t.stopped = true; S.gen++; return; }
+    if (IGNORED_BY_DEFAULT.has(sig)) { t.sigPending |= bit; return; }
+    t.killed = true; t.killCode = 128 + sig; S.gen++;
+  }
+  function signalTargets(target) { // >0 pid, <0 process group
+    if (target > 0) { const t = S.tasks.get(target); return t ? [t] : []; }
+    const out = [], n = K.x.k_pgrp_members(-target), b = n ? staged(n) : new Uint8Array(0), dv2 = new DataView(b.buffer);
+    for (let i = 0; i < b.length; i += 4) { const t = S.tasks.get(dv2.getUint32(i, true)); if (t) out.push(t); }
+    return out;
+  }
+  function sendSignal(target, sig) { for (const t of signalTargets(target)) deliver(t, sig); pump(); }
+  function ttySignal(sig) {
+    const fg = K.x.k_tty_get_fg();
+    if (fg > 0 && signalTargets(-fg).some((t) => !t.shell)) { sendSignal(-fg, sig); return true; }
+    if (sig === SIG.INT) { for (const t of S.tasks.values()) if (!t.shell && !t.daemon) deliver(t, SIG.INT); pump(); return true; }
+    return false;
+  }
+  const killForeground = () => ttySignal(SIG.INT);
+  const stopForeground = () => ttySignal(SIG.TSTP);
   const foregroundBusy = () => [...S.tasks.values()].some((t) => !t.shell && !t.daemon && !t.done);
 
   /* ---- WASI for one process ---- */
@@ -353,14 +384,32 @@
       },
       poll_child: (c) => (K.x.k_proc_exited(c) ? K.x.k_wait(c) : -1),
       kill(c, sig) {
-        const cr = K.x.k_proc_creds(pid) < 0 ? null : new Uint32Array(staged(K.x.k_proc_creds(pid)).slice().buffer);
-        const tr = K.x.k_proc_creds(c) < 0 ? null : new Uint32Array(staged(K.x.k_proc_creds(c)).slice().buffer);
-        if (!tr) return -3;
-        if (cr && cr[2] !== 0 && cr[0] !== tr[0]) return -1;
-        const under = (p) => { for (let i = 0; i < 64 && p > 0; i++) { if (p === c) return true; p = K.x.k_proc_ppid(p); } return false; };
-        for (const t of S.tasks.values()) if (under(t.pid)) { t.killed = true; t.killCode = 128 + (sig || 15); }
-        pump(); return 0;
+        const target = c | 0, victims = [];
+        if (target > 0) { if (K.x.k_proc_creds(target) < 0) return -71; victims.push(target); }
+        else { const n = K.x.k_pgrp_members(-target), b = n ? staged(n) : new Uint8Array(0), d = new DataView(b.buffer); for (let i = 0; i < b.length; i += 4) victims.push(d.getUint32(i, true)); if (!victims.length) return -71; }
+        const creds = (p) => (K.x.k_proc_creds(p) < 0 ? null : new Uint32Array(staged(K.x.k_proc_creds(p)).buffer));
+        const mine = creds(pid);
+        for (const v of victims) { const cr = creds(v); if (mine && cr && mine[2] !== 0 && mine[0] !== cr[0]) return -63; }
+        if (sig) sendSignal(target, sig);
+        return 0;
       },
+      sig_take() { const v = task.sigPending; task.sigPending = 0; return v; },
+      sig_ignore(mask) { task.sigIgnore = mask >>> 0; return 0; },
+      child_state(c) {
+        const t = S.tasks.get(c);
+        if (t && !t.done) return t.stopped ? 1 : 0;
+        return K.x.k_proc_exited(c) ? 2 : K.x.k_proc_creds(c) < 0 ? -1 : 0;
+      },
+      wait_change(ms) {
+        if (rewound(task) || !canBlock(task)) return 0;
+        const g = S.gen, end = performance.now() + (ms || 20);
+        return block(task, () => S.gen !== g || performance.now() >= end, end);
+      },
+      tcsetpgrp(g) { K.x.k_tty_set_fg(g); return 0; },
+      tcgetpgrp: () => K.x.k_tty_get_fg(),
+      setpgid: (p, g) => K.x.k_setpgid(p || pid, g),
+      getpgid: (p) => K.x.k_getpgid(p || pid),
+      setsid: () => K.x.k_setsid(pid),
       tty_size(out) { const d = dv(); d.setUint32(out, S.cols, true); d.setUint32(out + 4, S.rows, true); return 0; },
       tty_raw(on) { S.rawTty = !!on; if (S.onTtyMode) S.onTtyMode(S.rawTty); return 0; },
       dup: (fd) => K.x.k_fd_dup(pid, fd),
@@ -445,6 +494,7 @@
     const pid = x.k_spawn(ppid || 0, a, al, b, bl, c, cl, d, dl, -1, -1, -1);
     if (pid < 0) throw new Error("brush spawn failed " + pid);
     if (ppid === 1) x.k_force_creds(pid, 1000, 1000);
+    x.k_setsid(pid); x.k_tty_set_fg(pid);
     const task = makeTask(pid, true); task.shell = true;
     const inst = instantiate(pid, mod, task);
     const prev = S.cur; S.cur = task;
@@ -535,5 +585,5 @@
     }
   }
 
-  window.MavexRuntime = { startInit, startProcess, S, pump, killForeground, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
 })();

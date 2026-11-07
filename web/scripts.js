@@ -149,6 +149,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
     const l = k.toLowerCase();
     if (l === "c" && running && !(window.getSelection().toString())) { e.preventDefault(); write(buf + "^C\n"); buf = ""; pos = 0; renderLine(); R.killForeground(); return; }
+    if (l === "z" && running) { e.preventDefault(); write("^Z\n"); buf = ""; pos = 0; renderLine(); R.stopForeground(); return; }
     if (l === "d" && running) { e.preventDefault(); if (!buf.length) { K.k_tty_eof(); R.pump(); } return; }
     if (l === "c" && !(window.getSelection().toString())) { e.preventDefault(); write(promptText); write(buf + "^C\n"); newPrompt(); return; }
     if (l === "c") return;
