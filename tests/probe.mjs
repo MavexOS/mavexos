@@ -13,6 +13,7 @@ for (const s of steps) {
   if (typeof s === "number") await new Promise((r) => setTimeout(r, s));
   else if (s.startsWith("^")) await p.keyboard.press("Control+" + s.slice(1));
   else if (s.startsWith("@")) await p.keyboard.press(s.slice(1));
+  else if (s.startsWith("~")) await p.keyboard.type(s.slice(1));
   else if (s === "?alt") console.log("ALT>>\n" + await alt());
   else { await p.keyboard.type(s); await p.keyboard.press("Enter"); }
 }

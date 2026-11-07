@@ -154,3 +154,30 @@ pub extern "C" fn brush_cwd() -> i32 {
     let s = SH.with(|c| c.borrow().as_ref().unwrap().working_dir().to_string_lossy().into_owned());
     take_out(s.into_bytes())
 }
+
+/// Completes at byte `pos` of the line. Output: "insert\tdelete\tfilenames\n" then one candidate per line.
+#[unsafe(no_mangle)]
+pub extern "C" fn brush_complete(ptr: i32, len: i32, pos: i32) -> i32 {
+    let line = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr as *const u8, len as usize)).into_owned() };
+    let s = SH.with(|c| {
+        let mut g = c.borrow_mut();
+        let sh = g.as_mut().unwrap();
+        let cwd = sh.working_dir().to_path_buf();
+        match block(sh.complete(&line, pos as usize)) {
+            Ok(comp) => {
+                let files = comp.options.treat_as_filenames;
+                let mut o = format!("{}\t{}\t{}\n", comp.insertion_index, comp.delete_count, files as u8);
+                let mut cands = comp.candidates.into_iter().collect::<Vec<_>>();
+                cands.sort();
+                for mut cand in cands {
+                    if files && !cand.ends_with('/') && cwd.join(&cand).is_dir() { cand.push('/'); }
+                    o.push_str(&cand);
+                    o.push('\n');
+                }
+                o
+            }
+            Err(_) => String::new(),
+        }
+    });
+    take_out(s.into_bytes())
+}

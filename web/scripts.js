@@ -127,7 +127,22 @@ async function enter() {
 function setBuf(s) { buf = s; pos = s.length; renderLine(); }
 function prevWordStart() { let i = pos; while (i > 0 && buf[i - 1] === " ") i--; while (i > 0 && buf[i - 1] !== " ") i--; return i; }
 function commonPrefix(a) { let p = a[0]; for (const s of a) while (!s.startsWith(p)) p = p.slice(0, -1); return p; }
+const esc = (c) => c.replace(/([ \t'"\\$&;()<>|*?\[\]#!{}`])/g, "\\$1");
+function tabBrush() {
+  const left = buf.slice(0, pos), lb = enc.encode(left);
+  const r = R.brushComplete(left);
+  if (!r || !r.cands.length) return;
+  const start = dec.decode(lb.slice(0, r.ins)).length, end = dec.decode(lb.slice(0, r.ins + r.del)).length;
+  const typed = left.slice(start, end);
+  const fix = (c) => (r.files ? esc(c) : c);
+  const apply = (text) => { buf = buf.slice(0, start) + text + buf.slice(pos); pos = start + text.length; renderLine(); };
+  if (r.cands.length === 1) { const c = r.cands[0]; apply(fix(c) + (c.endsWith("/") ? "" : " ")); return; }
+  const pre = fix(commonPrefix(r.cands));
+  if (pre.length > typed.length) { apply(pre); return; }
+  write(promptText); write(buf + "\n" + r.cands.join("  ") + "\n"); renderLine();
+}
 function tab() {
+  if (useBrush && !running) return tabBrush();
   const left = buf.slice(0, pos);
   const start = left.lastIndexOf(" ") + 1;
   const word = left.slice(start);
@@ -142,14 +157,50 @@ function tab() {
   if (pre.length > word.length) { buf = buf.slice(0, start) + pre + buf.slice(pos); pos = start + pre.length; renderLine(); return; }
   write(promptText); write(buf + "\n" + c.join("  ") + "\n"); renderLine();
 }
+let killed = "", rs = null;
+function nextWordEnd() { let i = pos; while (i < buf.length && buf[i] === " ") i++; while (i < buf.length && buf[i] !== " ") i++; return i; }
+function kill(a, b) { killed = buf.slice(a, b); buf = buf.slice(0, a) + buf.slice(b); pos = a; renderLine(); }
+function rsFind(from) {
+  for (let i = from; i >= 0; i--) if (history[i].includes(rs.q)) { rs.idx = i; return; }
+  rs.idx = -1;
+}
+function rsRender() {
+  const m = rs.idx >= 0 ? history[rs.idx] : "";
+  $("before").textContent = "(reverse-i-search)`" + rs.q + "': " + m; $("cur").textContent = " "; $("after").textContent = ""; scrollDown();
+}
+function rsKey(e) {
+  const k = e.key, l = k.toLowerCase();
+  if (e.ctrlKey && l === "r") { e.preventDefault(); rsFind((rs.idx >= 0 ? rs.idx : history.length) - 1); rsRender(); return; }
+  if ((e.ctrlKey && (l === "g" || l === "c")) || k === "Escape") { e.preventDefault(); rs = null; renderLine(); return; }
+  if (k === "Backspace") { e.preventDefault(); rs.q = rs.q.slice(0, -1); rsFind(history.length - 1); rsRender(); return; }
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && k.length === 1) { e.preventDefault(); rs.q += k; rsFind(rs.idx >= 0 ? rs.idx : history.length - 1); rsRender(); return; }
+  e.preventDefault();
+  const m = rs.idx >= 0 ? history[rs.idx] : buf; rs = null; buf = m; pos = m.length; renderLine();
+  if (k === "Enter") enter();
+}
 function insert(s) { buf = buf.slice(0, pos) + s + buf.slice(pos); pos += s.length; renderLine(); }
 
 document.addEventListener("keydown", (e) => {
   if (!live) return;
   if (running && R.S.rawTty) { rawKey(e); return; }
   const k = e.key;
+  if (rs) { rsKey(e); return; }
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !running) {
+    if (k === "b") { e.preventDefault(); pos = prevWordStart(); renderLine(); return; }
+    if (k === "f") { e.preventDefault(); pos = nextWordEnd(); renderLine(); return; }
+    if (k === "d") { e.preventDefault(); kill(pos, nextWordEnd()); return; }
+    if (k === "Backspace") { e.preventDefault(); kill(prevWordStart(), pos); return; }
+  }
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
     const l = k.toLowerCase();
+    if (l === "r" && !running) { e.preventDefault(); rs = { q: "", idx: -1 }; rsRender(); return; }
+    if (!running && l === "b") { e.preventDefault(); if (pos > 0) { pos--; renderLine(); } return; }
+    if (!running && l === "f") { e.preventDefault(); if (pos < buf.length) { pos++; renderLine(); } return; }
+    if (!running && l === "p") { e.preventDefault(); if (hidx > 0) { if (hidx === history.length) draft = buf; hidx--; setBuf(history[hidx]); } return; }
+    if (!running && l === "n") { e.preventDefault(); if (hidx < history.length) { hidx++; setBuf(hidx === history.length ? draft : history[hidx]); } return; }
+    if (!running && l === "h") { e.preventDefault(); if (pos > 0) { buf = buf.slice(0, pos - 1) + buf.slice(pos); pos--; renderLine(); } return; }
+    if (!running && l === "y") { e.preventDefault(); insert(killed); return; }
+    if (!running && l === "t") { e.preventDefault(); if (pos > 0 && buf.length > 1) { const p = pos === buf.length ? pos - 1 : pos; buf = buf.slice(0, p - 1) + buf[p] + buf[p - 1] + buf.slice(p + 1); pos = p + 1; renderLine(); } return; }
     if (running && !R.S.tty.isig && (l === "c" || l === "z")) { e.preventDefault(); return; }
     if (l === "c" && running && !(window.getSelection().toString())) { e.preventDefault(); write(buf + "^C\n"); buf = ""; pos = 0; renderLine(); R.killForeground(); return; }
     if (l === "z" && running) { e.preventDefault(); write("^Z\n"); buf = ""; pos = 0; renderLine(); R.stopForeground(); return; }
@@ -158,11 +209,11 @@ document.addEventListener("keydown", (e) => {
     if (l === "c") return;
     if (l === "v") return;
     if (l === "l") { e.preventDefault(); out.textContent = ""; renderLine(); return; }
-    if (l === "u") { e.preventDefault(); buf = buf.slice(pos); pos = 0; renderLine(); return; }
-    if (l === "k") { e.preventDefault(); buf = buf.slice(0, pos); renderLine(); return; }
+    if (l === "u") { e.preventDefault(); kill(0, pos); return; }
+    if (l === "k") { e.preventDefault(); kill(pos, buf.length); return; }
     if (l === "a") { e.preventDefault(); pos = 0; renderLine(); return; }
     if (l === "e") { e.preventDefault(); pos = buf.length; renderLine(); return; }
-    if (l === "w") { e.preventDefault(); const s = prevWordStart(); buf = buf.slice(0, s) + buf.slice(pos); pos = s; renderLine(); return; }
+    if (l === "w") { e.preventDefault(); kill(prevWordStart(), pos); return; }
     if (l === "d") { e.preventDefault(); if (!buf.length) { buf = "exit"; pos = 4; enter(); } return; }
     return;
   }

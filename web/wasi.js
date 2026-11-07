@@ -536,6 +536,15 @@
     });
   }
   const brushPrompt = () => brushStr(B.task.inst.exports.brush_prompt()).replace(/[\x01\x02]/g, "");
+  function brushComplete(text) { // text = line up to the cursor
+    if (!B.task || !B.task.inst) return null;
+    const ex = B.task.inst.exports, bs = enc.encode(text), p = ex.brush_alloc(bs.length);
+    new Uint8Array(ex.memory.buffer).set(bs, p);
+    const r = brushStr(ex.brush_complete(p, bs.length, bs.length));
+    if (!r) return null;
+    const lines = r.split("\n"), [ins, del, files] = lines[0].split("\t");
+    return { ins: +ins, del: +del, files: files === "1", cands: lines.slice(1).filter((x) => x.length) };
+  }
   const brushCwd = () => brushStr(B.task.inst.exports.brush_cwd());
 
   /* ---- public API ---- */
@@ -590,5 +599,5 @@
     }
   }
 
-  window.MavexRuntime = { ttyReset, winch, startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { brushComplete, ttyReset, winch, startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
 })();
