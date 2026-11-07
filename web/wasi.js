@@ -44,7 +44,7 @@
 
   /* ---- Asyncify scheduler: tasks suspend inside blocking imports and are resumed by pump() ---- */
   const AGAIN = 6, EPIPE = 64, AS_UNWIND = 1, AS_REWIND = 2, ASYNC_BUF = 1 << 20;
-  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false, cols: 80, rows: 24, busy: 0, gen: 0 };
+  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false, tty: { icanon: true, echo: true, isig: true }, cols: 80, rows: 24, busy: 0, gen: 0 };
   const canBlock = (t) => !!t && !t.sync && t.asyncify;
   // Called first in every blockable import: finishes a pending rewind so the import can retry for real.
   function rewound(t) {
@@ -146,6 +146,9 @@
     if (sig === SIG.INT) { for (const t of S.tasks.values()) if (!t.shell && !t.daemon) deliver(t, SIG.INT); pump(); return true; }
     return false;
   }
+  function ttySet(m) { const t = S.tty; t.icanon = !!(m & 1); t.echo = !!(m & 2); t.isig = !!(m & 4); S.rawTty = !t.icanon; if (S.onTtyMode) S.onTtyMode(S.rawTty); }
+  const ttyReset = () => ttySet(1 | (S.tty.echo ? 2 : 0) | (S.tty.isig ? 4 : 0));
+  const winch = () => ttySignal(SIG.WINCH);
   const killForeground = () => ttySignal(SIG.INT);
   const stopForeground = () => ttySignal(SIG.TSTP);
   const foregroundBusy = () => [...S.tasks.values()].some((t) => !t.shell && !t.daemon && !t.done);
@@ -411,7 +414,9 @@
       getpgid: (p) => K.x.k_getpgid(p || pid),
       setsid: () => K.x.k_setsid(pid),
       tty_size(out) { const d = dv(); d.setUint32(out, S.cols, true); d.setUint32(out + 4, S.rows, true); return 0; },
-      tty_raw(on) { S.rawTty = !!on; if (S.onTtyMode) S.onTtyMode(S.rawTty); return 0; },
+      tty_raw(on) { ttySet(on ? 4 : 7); return 0; },
+      tty_getattr() { const t = S.tty; return (t.icanon ? 1 : 0) | (t.echo ? 2 : 0) | (t.isig ? 4 : 0); },
+      tty_setattr(m) { ttySet(m); return 0; },
       dup: (fd) => K.x.k_fd_dup(pid, fd),
       park() { throw new ParkSignal(); },
       getcreds(out) { const r = K.x.k_proc_creds(pid); if (r < 0) return r; m8().set(staged(r), out); return 0; },
@@ -585,5 +590,5 @@
     }
   }
 
-  window.MavexRuntime = { startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { ttyReset, winch, startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
 })();

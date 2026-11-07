@@ -2,6 +2,7 @@
 //! `sudo`/`su` are MavexOS' own minimal implementations (not sudo-rs); `ip` is a reimplementation
 //! of an iproute2-compatible subset over the kernel's virtual netns (netlink-like requests).
 mod ip;
+mod stty;
 mod sysutils;
 mod top;
 mod wg;
@@ -444,6 +445,8 @@ fn main() {
         "free" => sysutils::free(&args),
         "nproc" => sysutils::nproc(),
         "which" => sysutils::which(&args),
+        "stty" => stty::stty(&args),
+        "tty" => stty::tty(&args),
         "top" | "htop" => top::run(&name, &args),
         _ => { eprintln!("mavexutils: unknown applet '{name}'"); 127 }
     };

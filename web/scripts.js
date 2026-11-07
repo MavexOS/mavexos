@@ -79,9 +79,10 @@ function renderPrompt() {
   add(promptText.slice(last));
 }
 function renderLine() {
-  $("before").textContent = buf.slice(0, pos);
-  $("cur").textContent = pos < buf.length ? buf[pos] : " ";
-  $("after").textContent = buf.slice(pos + 1);
+  const hide = running && !R.S.tty.echo;
+  $("before").textContent = hide ? "" : buf.slice(0, pos);
+  $("cur").textContent = !hide && pos < buf.length ? buf[pos] : " ";
+  $("after").textContent = hide ? "" : buf.slice(pos + 1);
   scrollDown();
 }
 function showLine(show) { lineEl.style.display = show ? "" : "none"; }
@@ -99,21 +100,22 @@ function rawKey(e) {
   const k = e.key;
   if (e.ctrlKey && !e.altKey && !e.metaKey && k.length === 1) {
     const l = k.toLowerCase();
-    if (l === "c") { e.preventDefault(); R.killForeground(); return; }
+    if (l === "c" && R.S.tty.isig) { e.preventDefault(); R.killForeground(); return; }
+    if (l === "z" && R.S.tty.isig) { e.preventDefault(); R.stopForeground(); return; }
     if (l >= "a" && l <= "z") { e.preventDefault(); feed(String.fromCharCode(l.charCodeAt(0) - 96)); return; }
     return;
   }
   if (e.metaKey) return;
-  if (RAW_KEYS[k]) { e.preventDefault(); feed(RAW_KEYS[k]); return; }
-  if (k.length === 1) { e.preventDefault(); feed(k); }
+  if (RAW_KEYS[k]) { e.preventDefault(); feed(RAW_KEYS[k]); if (R.S.tty.echo && k === "Enter") write("\n"); return; }
+  if (k.length === 1) { e.preventDefault(); feed(k); if (R.S.tty.echo) write(k); }
 }
 async function runLine(line) {
   running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
-  try { write(await sys.shellRun(line)); } finally { running = false; R.S.rawTty = false; vt.leave(); }
+  try { write(await sys.shellRun(line)); } finally { running = false; R.ttyReset(); vt.leave(); }
 }
 async function enter() {
   const line = buf;
-  if (running) { write(buf + "\n"); buf = ""; pos = 0; hidx = history.length; renderLine(); feed(line + "\n"); return; }
+  if (running) { write((R.S.tty.echo ? buf : "") + "\n"); buf = ""; pos = 0; hidx = history.length; renderLine(); feed(line + "\n"); return; }
   live = false;
   if (dead) { write(promptText + "\n"); dead = false; sys.reset(); write("\x1b[0m"); newPrompt(); return; }
   commitInput();
@@ -148,6 +150,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key;
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
     const l = k.toLowerCase();
+    if (running && !R.S.tty.isig && (l === "c" || l === "z")) { e.preventDefault(); return; }
     if (l === "c" && running && !(window.getSelection().toString())) { e.preventDefault(); write(buf + "^C\n"); buf = ""; pos = 0; renderLine(); R.killForeground(); return; }
     if (l === "z" && running) { e.preventDefault(); write("^Z\n"); buf = ""; pos = 0; renderLine(); R.stopForeground(); return; }
     if (l === "d" && running) { e.preventDefault(); if (!buf.length) { K.k_tty_eof(); R.pump(); } return; }
@@ -198,7 +201,9 @@ function fitCols() {
   if (cw > 0 && K) K.k_tty_resize(Math.max(20, Math.floor(w / cw)));
   const lh = parseFloat(getComputedStyle(screenEl).lineHeight) || 19;
   const cols = Math.max(20, Math.floor(w / cw)), rows = Math.max(5, Math.floor((window.innerHeight - 24) / lh));
+  const changed = R.S.cols !== cols || R.S.rows !== rows;
   R.S.cols = cols; R.S.rows = rows; vt.resize(cols, rows);
+  if (changed && R.winch) R.winch();
 }
 window.addEventListener("resize", fitCols);
 
@@ -275,7 +280,7 @@ async function boot() {
   await publishSysfs();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty"]);
   R.install("rg", []);
   R.install("crabfetch", []);
   R.install("init", ["systemctl", "journalctl"]);

@@ -185,6 +185,14 @@ async function runBrush(name, type) {
   if (!/Stopped\s+sleep 30/.test(jt)) fails.push("ctrl-z stops foreground job");
   if (!/\njc-pid=\d+\n/.test(jt)) fails.push("$$ expands");
   if (/Running\s+sleep 30\s*\n\s*jc-killed/.test(jt)) fails.push("kill %1 ends bg job");
+  await ty("stty -echo"); await w(500);
+  await ty("read tx"); await w(500);
+  await ty("hidden-pw-text"); await w(500);
+  await ty("stty echo; echo tty-got=$tx; stty size; tty"); await w(1000);
+  const st = await text(p);
+  if (!st.includes("tty-got=hidden-pw-text")) fails.push("stty -echo input still read");
+  if (/\nhidden-pw-text\n/.test(st)) fails.push("stty -echo hides typed text");
+  if (!/\n\d+ \d+\n\/dev\/tty1\n/.test(st)) fails.push("stty size and tty");
   const t = await text(p);
   if (!t.includes("top-done") || !t.includes("Tasks:")) fails.push("top -b batch mode and shell survives");
   if (!t.includes("heartbeat: system is alive")) fails.push("journal captures service output");
@@ -201,7 +209,7 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.13\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.14\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   if (errs.length) fails.push("pageerror: " + errs.join("; "));
   console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (brush)`, fails.length ? fails : "");
