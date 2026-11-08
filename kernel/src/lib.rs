@@ -259,8 +259,8 @@ pub extern "C" fn k_pipe(pid: u32) -> i32 {
 
 // ---- fd and path operations (WASI-shaped) ----
 #[no_mangle]
-pub extern "C" fn k_tty_take() -> i32 {
-    let out = with_sys(|s| std::mem::take(&mut s.tty_out));
+pub extern "C" fn k_tty_take(tty: u32) -> i32 {
+    let out = with_sys(|s| s.ttys.get_mut(tty as usize).map(|t| std::mem::take(&mut t.out)).unwrap_or_default());
     if out.is_empty() { 0 } else { stage(out) }
 }
 
@@ -380,19 +380,34 @@ pub extern "C" fn k_proc_exited(pid: u32) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn k_tty_input(p: *const u8, n: usize) {
+pub unsafe extern "C" fn k_tty_input(tty: u32, p: *const u8, n: usize) {
     let data = std::slice::from_raw_parts(p, n);
-    with_sys(|s| s.tty_in.extend(data));
+    with_sys(|s| if let Some(t) = s.ttys.get_mut(tty as usize) { t.inp.extend(data) });
 }
 
 #[no_mangle]
-pub extern "C" fn k_tty_eof() {
-    with_sys(|s| s.tty_eof = true);
+pub extern "C" fn k_tty_eof(tty: u32) {
+    with_sys(|s| if let Some(t) = s.ttys.get_mut(tty as usize) { t.eof = true });
 }
 
 #[no_mangle]
-pub extern "C" fn k_tty_flush_input() {
-    with_sys(|s| { s.tty_in.clear(); s.tty_eof = false; });
+pub extern "C" fn k_tty_flush_input(tty: u32) {
+    with_sys(|s| if let Some(t) = s.ttys.get_mut(tty as usize) { t.inp.clear(); t.eof = false; });
+}
+
+#[no_mangle]
+pub extern "C" fn k_tty_new() -> u32 {
+    with_sys(|s| s.new_tty())
+}
+
+#[no_mangle]
+pub extern "C" fn k_proc_tty(pid: u32) -> u32 {
+    with_sys(|s| s.tty_of(pid))
+}
+
+#[no_mangle]
+pub extern "C" fn k_set_tty(pid: u32, tty: u32) {
+    with_sys(|s| s.set_tty(pid, tty))
 }
 
 #[no_mangle]
@@ -573,7 +588,7 @@ impl Host for KHost {
         env.push(format!("PWD={}", req.cwd));
         let (pid, out_pipe) = with_sys(|s| {
             let exe = s.which(&req.argv[0], &path, req.cwd)?;
-            s.tty_out.clear();
+            s.ttys[0].out.clear();
             let stdin = match req.stdin {
                 Some(t) => {
                     let id = s.new_pipe();
@@ -595,7 +610,7 @@ impl Host for KHost {
         unsafe { run_process(pid) };
         Some(with_sys(|s| {
             let code = s.wait(pid).unwrap_or(255);
-            let tty = String::from_utf8_lossy(&std::mem::take(&mut s.tty_out)).into_owned();
+            let tty = String::from_utf8_lossy(&std::mem::take(&mut s.ttys[0].out)).into_owned();
             match out_pipe {
                 Some(id) => {
                     let out = String::from_utf8_lossy(&s.pipe_drain(id)).into_owned();
@@ -704,13 +719,13 @@ pub extern "C" fn k_getsid(pid: u32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn k_tty_set_fg(pgid: u32) {
-    with_sys(|s| s.tty_fg = pgid)
+pub extern "C" fn k_tty_set_fg(tty: u32, pgid: u32) {
+    with_sys(|s| if let Some(t) = s.ttys.get_mut(tty as usize) { t.fg = pgid })
 }
 
 #[no_mangle]
-pub extern "C" fn k_tty_get_fg() -> i32 {
-    with_sys(|s| s.tty_fg as i32)
+pub extern "C" fn k_tty_get_fg(tty: u32) -> i32 {
+    with_sys(|s| s.ttys.get(tty as usize).map_or(0, |t| t.fg) as i32)
 }
 
 fn u32_list(v: Vec<u32>) -> i32 {

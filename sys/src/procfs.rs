@@ -80,7 +80,7 @@ impl Sys {
             let ticks = p.cpu_ms / 10;
             let start = p.start_ms.saturating_sub(h.boot_ns / 1_000_000) / 10;
             let rss_pages = p.rss_kib / 4;
-            let stat = format!("{pid} ({comm}) {state} {} {} {} 0 {} 0 0 0 0 0 {ticks} 0 0 0 20 0 1 0 {start} {} {rss_pages}\n", p.ppid, p.pgid, p.sid, if p.pgid == self.tty_fg { p.pgid as i64 } else { -1 }, p.rss_kib * 1024);
+            let stat = format!("{pid} ({comm}) {state} {} {} {} 0 {} 0 0 0 0 0 {ticks} 0 0 0 20 0 1 0 {start} {} {rss_pages}\n", p.ppid, p.pgid, p.sid, if p.pgid == self.ttys[p.tty as usize].fg { p.pgid as i64 } else { -1 }, p.rss_kib * 1024);
             let status = format!("Name:\t{comm}\nState:\t{state}\nPid:\t{pid}\nPPid:\t{}\nUid:\t{}\t{}\t{}\t{}\nGid:\t{}\t{}\t{}\t{}\nThreads:\t1\nVmSize:\t{rk:>8} kB\nVmRSS:\t{rk:>8} kB\n", p.ppid, p.uid, p.euid, p.uid, p.euid, p.gid, p.egid, p.gid, p.egid, rk = p.rss_kib);
             let (cwd, exe) = (p.cwd.clone(), p.exe.clone());
             let _ = self.vfs.mkdir(&dir, 0o555);

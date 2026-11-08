@@ -1,9 +1,34 @@
 const $ = (id) => document.getElementById(id);
-const screenEl = $("screen"), out = $("out"), lineEl = $("line");
 const FAST = location.hash.includes("fast");
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-/* ---------- ANSI output ---------- */
+/* ---------- kernel ---------- */
+const R = window.MavexRuntime;
+let K, mem;
+const enc = new TextEncoder(), dec = new TextDecoder();
+const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(K.memory.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
+const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { K.k_free(p, n); } };
+const staged = (n) => dec.decode(new Uint8Array(K.memory.buffer, K.k_result_ptr(), n));
+const useBrush = !location.hash.includes("msh");
+const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "LANG=en_US.UTF-8", "TERM=xterm-256color", "TERM_PROGRAM=mavex-terminal", "PWD=/home/user",
+  "PS1=\\[\\e[1;32m\\]\\u@mavex\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ "];
+const startLogin = (tt) => R.startBrush("/home/user", LOGIN_ENV, 1, tt);
+const sys = {
+  mkdir: (path) => withStr(path, (p, n) => K.k_mkdir(p, n)),
+  unlink: (path) => withStr(path, (p, n) => K.k_unlink(p, n)),
+  writeFile: (path, text) => withStr(path, (p, n) => { const [d, dn] = put(enc.encode(text)); try { return K.k_write_file(p, n, d, dn); } finally { K.k_free(d, dn); } }),
+  readFile: (path) => withStr(path, (p, n) => { const r = K.k_read_file(p, n); return r < 0 ? r : staged(r); }),
+  readdir: (path) => withStr(path, (p, n) => { const r = K.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
+  complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
+};
+
+const write = (s) => tabs.cur.write(s);
+function makeTab(tt, els) {
+const { screenEl, out, lineEl, promptEl, beforeEl, curEl, afterEl, altEl } = els;
+const vt = window.MavexVT.create(altEl, screenEl);
+const ts = R.S.ttys[tt];
+const isCur = () => tabs.cur === self;
+let self = null;
 let sgr = { cls: "" };
 function ansiToNodes(text) {
   const re = /\x1b\[([0-9;]*)([A-Za-z])/g;
@@ -12,7 +37,7 @@ function ansiToNodes(text) {
   while ((m = re.exec(text))) {
     emit(text.slice(last, m.index));
     last = re.lastIndex;
-    if (m[2] === "J") { out.textContent = ""; }
+    if (m[2] === "J") { out.textContent = ""; nlines = 0; }
     else if (m[2] === "m") {
       const codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
       let bold = sgr.cls.includes("b"), fg = (sgr.cls.match(/c\d+/) || [""])[0], bg = (sgr.cls.match(/g\d+/) || [""])[0];
@@ -30,43 +55,29 @@ function ansiToNodes(text) {
   }
   emit(text.slice(last));
 }
-function write(text) { text = vt.process(text); if (text) { ansiToNodes(text); scrollDown(); } }
-function scrollDown() { screenEl.scrollTop = screenEl.scrollHeight; }
+const MAX_LINES = 5000;
+let nlines = 0;
+function trimScrollback() {
+  while (nlines > MAX_LINES && out.firstChild) { const n = (out.firstChild.textContent.match(/\n/g) || []).length; nlines -= n; out.removeChild(out.firstChild); }
+}
+function write(text) {
+  text = vt.process(text);
+  if (!text) return;
+  nlines += (text.match(/\n/g) || []).length;
+  ansiToNodes(text); trimScrollback(); scrollDown();
+}
+function scrollDown() { if (isCur()) screenEl.scrollTop = screenEl.scrollHeight; else pendingScroll = true; }
 
-/* ---------- kernel ---------- */
-const R = window.MavexRuntime;
-const vt = window.MavexVT; vt.init($("alt"));
-let K, mem;
-const enc = new TextEncoder(), dec = new TextDecoder();
-const put = (bytes) => { const p = K.k_alloc(bytes.length); new Uint8Array(K.memory.buffer, p, bytes.length).set(bytes); return [p, bytes.length]; };
-const withStr = (s, f) => { const [p, n] = put(enc.encode(s)); try { return f(p, n); } finally { K.k_free(p, n); } };
-const staged = (n) => dec.decode(new Uint8Array(K.memory.buffer, K.k_result_ptr(), n));
-const useBrush = !location.hash.includes("msh");
 let brushExited = false;
-const LOGIN_ENV = ["PATH=/bin", "HOME=/home/user", "USER=user", "LOGNAME=user", "HOSTNAME=mavex", "SHELL=/bin/brush", "LANG=en_US.UTF-8", "TERM=xterm-256color", "TERM_PROGRAM=mavex-terminal", "PWD=/home/user",
-  "PS1=\\[\\e[1;32m\\]\\u@mavex\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ "];
-function startLogin() { R.startBrush("/home/user", LOGIN_ENV, 1); }
-const sys = {
-  mkdir: (path) => withStr(path, (p, n) => K.k_mkdir(p, n)),
-  unlink: (path) => withStr(path, (p, n) => K.k_unlink(p, n)),
-  writeFile: (path, text) => withStr(path, (p, n) => { const [d, dn] = put(enc.encode(text)); try { return K.k_write_file(p, n, d, dn); } finally { K.k_free(d, dn); } }),
-  readFile: (path) => withStr(path, (p, n) => { const r = K.k_read_file(p, n); return r < 0 ? r : staged(r); }),
-  readdir: (path) => withStr(path, (p, n) => { const r = K.k_readdir(p, n); return r < 0 ? r : (r === 0 ? [] : staged(r).split("\n")); }),
-  shellRun: (line) => {
-    if (!useBrush) return withStr(line, (p, n) => staged(K.k_shell_run(p, n)));
-    return R.brushRun(line).then((r) => { brushExited = r.exited; return r.out; });
-  },
-  prompt: () => (useBrush ? R.brushPrompt() : staged(K.k_shell_prompt())),
-  complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
-  exited: () => (useBrush ? brushExited : K.k_shell_exited() === 1),
-  reset: () => { if (useBrush) { brushExited = false; startLogin(); } else K.k_shell_reset(); },
-};
-
-/* ---------- line editor ---------- */
+const shellRun = (line) => (useBrush ? R.brushRun(tt, line).then((r) => { brushExited = r.exited; return r.out; }) : withStr(line, (p, n) => staged(K.k_shell_run(p, n))));
+const prompt = () => (useBrush ? R.brushPrompt(tt) : staged(K.k_shell_prompt()));
+const exited = () => (useBrush ? brushExited : K.k_shell_exited() === 1);
+const reset = () => { if (useBrush) { brushExited = false; startLogin(tt); } else K.k_shell_reset(); };
+let pendingScroll = false;
 let buf = "", pos = 0, history = [], hidx = 0, draft = "", promptText = "", live = false, dead = false;
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 function renderPrompt() {
-  const el = $("prompt"); el.textContent = "";
+  const el = promptEl; el.textContent = "";
   const re = /\x1b\[([0-9;]*)m/g; let last = 0, m, cls = "";
   const add = (s) => { if (!s) return; const sp = document.createElement("span"); if (cls) sp.className = cls; sp.textContent = s; el.appendChild(sp); };
   while ((m = re.exec(promptText))) {
@@ -79,14 +90,14 @@ function renderPrompt() {
   add(promptText.slice(last));
 }
 function renderLine() {
-  const hide = running && !R.S.tty.echo;
-  $("before").textContent = hide ? "" : buf.slice(0, pos);
-  $("cur").textContent = !hide && pos < buf.length ? buf[pos] : " ";
-  $("after").textContent = hide ? "" : buf.slice(pos + 1);
+  const hide = running && !ts.echo;
+  beforeEl.textContent = hide ? "" : buf.slice(0, pos);
+  curEl.textContent = !hide && pos < buf.length ? buf[pos] : " ";
+  afterEl.textContent = hide ? "" : buf.slice(pos + 1);
   scrollDown();
 }
 function showLine(show) { lineEl.style.display = show ? "" : "none"; }
-function newPrompt() { promptText = sys.prompt(); renderPrompt(); buf = ""; pos = 0; hidx = history.length; renderLine(); showLine(true); live = true; }
+function newPrompt() { promptText = prompt(); renderPrompt(); buf = ""; pos = 0; hidx = history.length; renderLine(); showLine(true); live = true; }
 
 function commitInput(extra) {
   write(promptText); // colored prompt echo
@@ -94,35 +105,37 @@ function commitInput(extra) {
 }
 let running = false;
 vt.onReply = (s) => feed(s);
-const feed = (str) => { const b = enc.encode(str), [p, n] = put(b); try { K.k_tty_input(p, n); } finally { K.k_free(p, n); } R.pump(); };
+const feed = (str) => { const b = enc.encode(str), [p, n] = put(b); try { K.k_tty_input(tt, p, n); } finally { K.k_free(p, n); } R.pump(); };
 const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~" };
 function rawKey(e) {
   const k = e.key;
   if (e.ctrlKey && !e.altKey && !e.metaKey && k.length === 1) {
     const l = k.toLowerCase();
-    if (l === "c" && R.S.tty.isig) { e.preventDefault(); R.killForeground(); return; }
-    if (l === "z" && R.S.tty.isig) { e.preventDefault(); R.stopForeground(); return; }
+    if (l === "c" && ts.isig) { e.preventDefault(); R.killForeground(tt); return; }
+    if (l === "z" && ts.isig) { e.preventDefault(); R.stopForeground(tt); return; }
     if (l >= "a" && l <= "z") { e.preventDefault(); feed(String.fromCharCode(l.charCodeAt(0) - 96)); return; }
     return;
   }
   if (e.metaKey) return;
   if (vt.appCursor && /^Arrow|^Home$|^End$/.test(k)) { e.preventDefault(); feed("\x1bO" + { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D", Home: "H", End: "F" }[k]); return; }
-  if (RAW_KEYS[k]) { e.preventDefault(); feed(RAW_KEYS[k]); if (R.S.tty.echo && k === "Enter") write("\n"); return; }
-  if (k.length === 1) { e.preventDefault(); feed(k); if (R.S.tty.echo) write(k); }
+  if (RAW_KEYS[k]) { e.preventDefault(); feed(RAW_KEYS[k]); if (ts.echo && k === "Enter") write("\n"); return; }
+  if (k.length === 1) { e.preventDefault(); feed(k); if (ts.echo) write(k); }
 }
 async function runLine(line) {
   running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
-  try { write(await sys.shellRun(line)); } finally { running = false; R.ttyReset(); vt.leave(); vt.resetModes(); }
+  try { write(await shellRun(line)); } finally { running = false; R.ttyReset(tt); vt.leave(); vt.resetModes(); }
 }
 async function enter() {
   const line = buf;
-  if (running) { write((R.S.tty.echo ? buf : "") + "\n"); buf = ""; pos = 0; hidx = history.length; renderLine(); feed(line + "\n"); return; }
+  if (running) { write((ts.echo ? buf : "") + "\n"); buf = ""; pos = 0; hidx = history.length; renderLine(); feed(line + "\n"); return; }
   live = false;
-  if (dead) { write(promptText + "\n"); dead = false; sys.reset(); write("\x1b[0m"); newPrompt(); return; }
+  if (dead && tabs.list.length > 1) { closeTab(self); return; }
+  if (dead) { write(promptText + "\n"); dead = false; reset(); write("\x1b[0m"); newPrompt(); return; }
   commitInput();
   if (line.trim() && history[history.length - 1] !== line) history.push(line);
   if (line.trim()) await runLine(line);
-  if (sys.exited()) { dead = true; write("\n[process completed - press Enter to restart]\n"); promptText = ""; buf = ""; pos = 0; renderPrompt(); renderLine(); live = true; return; }
+  if (exited() && tabs.list.length > 1) { closeTab(self); return; }
+  if (exited()) { dead = true; write("\n[process completed - press Enter to restart]\n"); promptText = ""; buf = ""; pos = 0; renderPrompt(); renderLine(); live = true; return; }
   newPrompt();
 }
 function setBuf(s) { buf = s; pos = s.length; renderLine(); }
@@ -131,7 +144,7 @@ function commonPrefix(a) { let p = a[0]; for (const s of a) while (!s.startsWith
 const esc = (c) => c.replace(/([ \t'"\\$&;()<>|*?\[\]#!{}`])/g, "\\$1");
 function tabBrush() {
   const left = buf.slice(0, pos), lb = enc.encode(left);
-  const r = R.brushComplete(left);
+  const r = R.brushComplete(tt, left);
   if (!r || !r.cands.length) return;
   const start = dec.decode(lb.slice(0, r.ins)).length, end = dec.decode(lb.slice(0, r.ins + r.del)).length;
   const typed = left.slice(start, end);
@@ -167,7 +180,7 @@ function rsFind(from) {
 }
 function rsRender() {
   const m = rs.idx >= 0 ? history[rs.idx] : "";
-  $("before").textContent = "(reverse-i-search)`" + rs.q + "': " + m; $("cur").textContent = " "; $("after").textContent = ""; scrollDown();
+  beforeEl.textContent = "(reverse-i-search)`" + rs.q + "': " + m; curEl.textContent = " "; afterEl.textContent = ""; scrollDown();
 }
 function rsKey(e) {
   const k = e.key, l = k.toLowerCase();
@@ -181,9 +194,10 @@ function rsKey(e) {
 }
 function insert(s) { buf = buf.slice(0, pos) + s + buf.slice(pos); pos += s.length; renderLine(); }
 
-document.addEventListener("keydown", (e) => {
+function onKey(e) {
   if (!live) return;
-  if (running && R.S.rawTty) { rawKey(e); return; }
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === "PageUp" || e.key === "PageDown") && !vt.active) { e.preventDefault(); screenEl.scrollBy(0, (e.key === "PageUp" ? -1 : 1) * screenEl.clientHeight * 0.9); return; }
+  if (running && ts.raw) { rawKey(e); return; }
   const k = e.key;
   if (rs) { rsKey(e); return; }
   if (e.altKey && !e.ctrlKey && !e.metaKey && !running) {
@@ -202,10 +216,10 @@ document.addEventListener("keydown", (e) => {
     if (!running && l === "h") { e.preventDefault(); if (pos > 0) { buf = buf.slice(0, pos - 1) + buf.slice(pos); pos--; renderLine(); } return; }
     if (!running && l === "y") { e.preventDefault(); insert(killed); return; }
     if (!running && l === "t") { e.preventDefault(); if (pos > 0 && buf.length > 1) { const p = pos === buf.length ? pos - 1 : pos; buf = buf.slice(0, p - 1) + buf[p] + buf[p - 1] + buf.slice(p + 1); pos = p + 1; renderLine(); } return; }
-    if (running && !R.S.tty.isig && (l === "c" || l === "z")) { e.preventDefault(); return; }
-    if (l === "c" && running && !(window.getSelection().toString())) { e.preventDefault(); write(buf + "^C\n"); buf = ""; pos = 0; renderLine(); R.killForeground(); return; }
-    if (l === "z" && running) { e.preventDefault(); write("^Z\n"); buf = ""; pos = 0; renderLine(); R.stopForeground(); return; }
-    if (l === "d" && running) { e.preventDefault(); if (!buf.length) { K.k_tty_eof(); R.pump(); } return; }
+    if (running && !ts.isig && (l === "c" || l === "z")) { e.preventDefault(); return; }
+    if (l === "c" && running && !(window.getSelection().toString())) { e.preventDefault(); write(buf + "^C\n"); buf = ""; pos = 0; renderLine(); R.killForeground(tt); return; }
+    if (l === "z" && running) { e.preventDefault(); write("^Z\n"); buf = ""; pos = 0; renderLine(); R.stopForeground(tt); return; }
+    if (l === "d" && running) { e.preventDefault(); if (!buf.length) { K.k_tty_eof(tt); R.pump(); } return; }
     if (l === "c" && !(window.getSelection().toString())) { e.preventDefault(); write(promptText); write(buf + "^C\n"); newPrompt(); return; }
     if (l === "c") return;
     if (l === "v") return;
@@ -232,20 +246,107 @@ document.addEventListener("keydown", (e) => {
     case "Tab": e.preventDefault(); tab(); return;
   }
   if (k.length === 1) { e.preventDefault(); insert(k); }
-});
-document.addEventListener("paste", (e) => {
+}
+function onPaste(e) {
   if (!live) return;
   e.preventDefault();
   const text = (e.clipboardData || window.clipboardData).getData("text");
-  if (running && !R.S.tty.icanon) { feed(vt.paste ? "\x1b[200~" + text + "\x1b[201~" : text.replace(/\n/g, "\r")); return; }
+  if (running && !ts.icanon) { feed(vt.paste ? "\x1b[200~" + text + "\x1b[201~" : text.replace(/\n/g, "\r")); return; }
   const parts = text.replace(/\r/g, "").split("\n");
   parts.forEach((p, i) => { insert(p); if (i < parts.length - 1) enter(); });
+}
+
+  let down = -1, last = "";
+  const cell = (e) => {
+    const r = altEl.getBoundingClientRect(), cs = getComputedStyle(altEl);
+    const x = Math.floor((e.clientX - r.left - (parseFloat(cs.paddingLeft) || 0)) / (vt.cw || 8)) + 1;
+    const y = Math.floor((e.clientY - r.top - (parseFloat(cs.paddingTop) || 0)) / (vt.lh || 19)) + 1;
+    return [Math.max(1, Math.min(vt.cols, x)), Math.max(1, Math.min(vt.rows, y))];
+  };
+  const report = (b, x, y, release, e) => {
+    b |= (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
+    if (vt.mouseSgr) feed(`\x1b[<${b};${x};${y}${release ? "m" : "M"}`);
+    else feed("\x1b[M" + String.fromCharCode(32 + (release ? 3 : b), 32 + Math.min(x, 223), 32 + Math.min(y, 223)));
+  };
+  const on = () => isCur() && vt.active && vt.mouse > 0 && running;
+  altEl.addEventListener("mousedown", (e) => { if (!on() || e.button > 2) return; e.preventDefault(); down = e.button; const [x, y] = cell(e); report(e.button === 1 ? 1 : e.button === 2 ? 2 : 0, x, y, false, e); });
+  window.addEventListener("mouseup", (e) => { if (down < 0 || !on()) { down = -1; return; } const [x, y] = cell(e); report(down === 1 ? 1 : down === 2 ? 2 : 0, x, y, true, e); down = -1; });
+  window.addEventListener("mousemove", (e) => {
+    if (!on() || vt.mouseMotion === 0 || (vt.mouseMotion === 1 && down < 0)) return;
+    const [x, y] = cell(e), key = x + "," + y; if (key === last) return; last = key;
+    report(32 + (down < 0 ? 3 : down === 1 ? 1 : down === 2 ? 2 : 0), x, y, false, e);
+  });
+  altEl.addEventListener("wheel", (e) => { if (!on()) return; e.preventDefault(); const [x, y] = cell(e); report(e.deltaY < 0 ? 64 : 65, x, y, false, e); }, { passive: false });
+
+ts.onOutput = write;
+vt.cw = 8; vt.lh = 19;
+self = { tt, els, vt, write, onKey, onPaste, newPrompt, showLine, renderLine, startUp: () => { newPrompt(); }, flushScroll: () => { if (pendingScroll) { pendingScroll = false; scrollDown(); } }, isDead: () => dead, isLive: () => live, input: (v) => { if (live && v) insert(v.replace(/\n/g, "")); }, root: els.root };
+return self;
+}
+
+/* ---------- terminal tabs ---------- */
+const tabs = { list: [], cur: null };
+const termsEl = $("terms"), tabbar = $("tabs");
+function makeEls(root) {
+  const q = (c) => root.querySelector("." + c);
+  return { root, screenEl: q("screen"), out: q("out"), lineEl: q("line"), promptEl: q("prompt"), beforeEl: q("before"), curEl: q("cursor"), afterEl: q("after"), altEl: q("alt") };
+}
+function buildTerm() {
+  const root = document.createElement("div"); root.className = "term";
+  root.innerHTML = '<div class="screen"><pre class="out"></pre><pre class="line"><span class="prompt"></span><span class="before"></span><span class="cursor"> </span><span class="after"></span></pre></div><pre class="alt"></pre>';
+  termsEl.appendChild(root);
+  return root;
+}
+function attachTab(t) {
+  for (const el of [t.els.screenEl, t.els.altEl]) el.addEventListener("click", () => { if (!window.getSelection().toString()) $("sink").focus(); });
+  tabs.list.push(t);
+}
+function renderBar() {
+  tabbar.style.display = tabs.list.length > 1 ? "flex" : "none";
+  tabbar.textContent = "";
+  tabs.list.forEach((t, i) => {
+    const b = document.createElement("button"); b.className = "tab" + (t === tabs.cur ? " on" : ""); b.textContent = (i + 1) + ": tty" + (t.tt + 1);
+    b.addEventListener("click", () => switchTab(t)); tabbar.appendChild(b);
+  });
+  const plus = document.createElement("button"); plus.className = "tab plus"; plus.textContent = "+"; plus.addEventListener("click", newTab); tabbar.appendChild(plus);
+}
+function switchTab(t) {
+  tabs.cur = t;
+  for (const x of tabs.list) x.root.classList.toggle("on", x === t);
+  renderBar(); fitCols(); t.flushScroll(); $("sink").focus();
+}
+function newTab() {
+  if (!useBrush || !K || tabs.list.length >= 9) return;
+  const tt = R.newTty();
+  const t = makeTab(tt, makeEls(buildTerm()));
+  attachTab(t);
+  startLogin(tt);
+  switchTab(t);
+  t.write("MavexOS tty" + (tt + 1) + "\n\n");
+  t.write(sys.readFile("/etc/motd") + "\n");
+  t.newPrompt();
+}
+function closeTab(t) {
+  const i = tabs.list.indexOf(t);
+  if (i < 0 || tabs.list.length < 2) return;
+  tabs.list.splice(i, 1); t.root.remove();
+  switchTab(tabs.list[Math.min(i, tabs.list.length - 1)]);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.altKey && !e.metaKey && e.key.toLowerCase() === "t") { e.preventDefault(); newTab(); return; }
+  if (e.altKey && !e.ctrlKey && !e.metaKey && tabs.list.length > 1) {
+    const d = /^[1-9]$/.test(e.key) ? +e.key - 1 : e.key === "PageUp" ? tabs.list.indexOf(tabs.cur) - 1 : e.key === "PageDown" ? tabs.list.indexOf(tabs.cur) + 1 : -1;
+    if (d >= 0 && d < tabs.list.length) { e.preventDefault(); switchTab(tabs.list[d]); return; }
+  }
+  if (tabs.cur) tabs.cur.onKey(e);
 });
-for (const el of [screenEl, $("alt")]) el.addEventListener("click", () => { if (!window.getSelection().toString()) $("sink").focus(); });
-$("sink").addEventListener("input", (e) => { const v = e.target.value; e.target.value = ""; if (live && v) insert(v.replace(/\n/g, "")); });
+document.addEventListener("paste", (e) => { if (tabs.cur) tabs.cur.onPaste(e); });
+$("sink").addEventListener("input", (e) => { const v = e.target.value; e.target.value = ""; if (tabs.cur) tabs.cur.input(v); });
 
 /* ---------- terminal size ---------- */
 function fitCols() {
+  const t = tabs.cur; if (!t) return;
+  const { screenEl, out } = t.els;
   const probe = document.createElement("span");
   probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre";
   probe.textContent = "x".repeat(100); out.appendChild(probe);
@@ -253,14 +354,19 @@ function fitCols() {
   const w = screenEl.clientWidth - 24;
   if (cw > 0 && K) K.k_tty_resize(Math.max(20, Math.floor(w / cw)));
   const lh = parseFloat(getComputedStyle(screenEl).lineHeight) || 19;
-  vt.cw = cw; vt.lh = lh;
-  const cols = Math.max(20, Math.floor(w / cw)), rows = Math.max(5, Math.floor((window.innerHeight - 24) / lh));
+  const cols = Math.max(20, Math.floor(w / cw)), rows = Math.max(5, Math.floor((termsEl.clientHeight - 24) / lh));
   const changed = R.S.cols !== cols || R.S.rows !== rows;
-  R.S.cols = cols; R.S.rows = rows; vt.resize(cols, rows);
+  R.S.cols = cols; R.S.rows = rows;
+  for (const x of tabs.list) { x.vt.cw = cw; x.vt.lh = lh; x.vt.resize(cols, rows); }
   if (changed && R.winch) R.winch();
 }
 window.addEventListener("resize", fitCols);
 
+
+{
+  const t0 = makeTab(0, makeEls($("term0")));
+  attachTab(t0); tabs.cur = t0; t0.root.classList.add("on");
+}
 /* ---------- boot ---------- */
 async function detectGpu() {
   const lim = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), 1500))]);
@@ -316,10 +422,9 @@ async function publishSysfs() {
 }
 
 async function boot() {
-  showLine(false);
+  tabs.cur.showLine(false);
   const rt = await R.boot(window.MAVEX_KERNEL_B64);
   K = rt.x;
-  R.S.onOutput = write;
   const coreutils = R.registerModule("coreutils", window.MAVEX_COREUTILS_B64);
   const brushMod = R.registerModule("brush", window.MAVEX_BRUSH_B64);
   const mxu = R.registerModule("mavexutils", window.MAVEX_MAVEXUTILS_B64);
@@ -341,7 +446,7 @@ async function boot() {
   R.installSetuid("mavexutils", ["sudo", "su"]);
   R.startInit();
   for (let i = 0; i < 60 && typeof sys.readFile("/run/mavex-init/booted") !== "string"; i++) await sleep(50);
-  if (useBrush) startLogin();
+  if (useBrush) startLogin(0);
   fitCols();
   window.mavex = sys;
   for (const l of R.K.consoleBuf.split("\n").filter(Boolean)) {
@@ -353,35 +458,10 @@ async function boot() {
   const ver = (R.K.consoleBuf.match(/MavexOS ([0-9.]+)/) || [0, "?"])[1];
   write("\nMavexOS " + ver + " tty1\n\nmavex login: user (automatic login)\n");
   write(sys.readFile("/etc/motd") + "\n");
-  newPrompt();
+  tabs.cur.newPrompt();
   $("sink").focus();
   window.mavexReady = true;
   window.dispatchEvent(new Event("mavex-ready"));
 }
 boot().catch((e) => { write("\n\x1b[1;31mkernel panic: " + e + "\x1b[0m\n"); throw e; });
 
-/* ---------- mouse reporting (xterm 1000/1002/1003, SGR 1006) ---------- */
-{
-  const altEl = $("alt");
-  let down = -1, last = "";
-  const cell = (e) => {
-    const r = altEl.getBoundingClientRect(), cs = getComputedStyle(altEl);
-    const x = Math.floor((e.clientX - r.left - (parseFloat(cs.paddingLeft) || 0)) / (vt.cw || 8)) + 1;
-    const y = Math.floor((e.clientY - r.top - (parseFloat(cs.paddingTop) || 0)) / (vt.lh || 19)) + 1;
-    return [Math.max(1, Math.min(vt.cols, x)), Math.max(1, Math.min(vt.rows, y))];
-  };
-  const report = (b, x, y, release, e) => {
-    b |= (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
-    if (vt.mouseSgr) feed(`\x1b[<${b};${x};${y}${release ? "m" : "M"}`);
-    else feed("\x1b[M" + String.fromCharCode(32 + (release ? 3 : b), 32 + Math.min(x, 223), 32 + Math.min(y, 223)));
-  };
-  const on = () => vt.active && vt.mouse > 0 && running;
-  altEl.addEventListener("mousedown", (e) => { if (!on() || e.button > 2) return; e.preventDefault(); down = e.button; const [x, y] = cell(e); report(e.button === 1 ? 1 : e.button === 2 ? 2 : 0, x, y, false, e); });
-  window.addEventListener("mouseup", (e) => { if (down < 0 || !on()) { down = -1; return; } const [x, y] = cell(e); report(down === 1 ? 1 : down === 2 ? 2 : 0, x, y, true, e); down = -1; });
-  window.addEventListener("mousemove", (e) => {
-    if (!on() || vt.mouseMotion === 0 || (vt.mouseMotion === 1 && down < 0)) return;
-    const [x, y] = cell(e), key = x + "," + y; if (key === last) return; last = key;
-    report(32 + (down < 0 ? 3 : down === 1 ? 1 : down === 2 ? 2 : 0), x, y, false, e);
-  });
-  altEl.addEventListener("wheel", (e) => { if (!on()) return; e.preventDefault(); const [x, y] = cell(e); report(e.deltaY < 0 ? 64 : 65, x, y, false, e); }, { passive: false });
-}

@@ -1,9 +1,16 @@
 html,body{margin:0;height:100%;background:#0b0e14;color:#c8d3e0}
-#screen{box-sizing:border-box;height:100%;padding:12px;overflow:auto;cursor:text;
+body{display:flex;flex-direction:column}
+#terms{position:relative;flex:1;min-height:0}
+.term{position:absolute;inset:0;display:none}
+.term.on{display:block}
+#tabs{display:none;gap:2px;background:#07090d;padding:2px 4px 0;font:13px ui-monospace,Menlo,Consolas,monospace}
+.tab{background:#161b24;color:#8b97a8;border:0;border-radius:4px 4px 0 0;padding:3px 10px;font:inherit;cursor:pointer}
+.tab.on{background:#0b0e14;color:#c8d3e0}
+#screen,.screen{box-sizing:border-box;height:100%;padding:12px;overflow:auto;cursor:text;
         font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}
 pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
-#cur{background:#c8d3e0;color:#0b0e14;animation:blink 1s steps(1) infinite}
-#cur.idle{animation:none}
+#cur,.cursor{background:#c8d3e0;color:#0b0e14;animation:blink 1s steps(1) infinite}
+.cursor.idle{animation:none}
 @keyframes blink{50%{background:transparent;color:inherit}}
 #sink{position:fixed;left:-1000px;top:0;width:1px;height:1px;opacity:0}
 .b{font-weight:bold}
@@ -14,4 +21,4 @@ pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
 
 .g40{background:#4c566a}.g41{background:#e06c75}.g42{background:#98c379}.g43{background:#e5c07b}.g44{background:#61afef}.g45{background:#c678dd}.g46{background:#56b6c2}.g47{background:#c8d3e0}.g100{background:#6b7689}.g101{background:#ff7b86}.g102{background:#b5e890}.g103{background:#f0d08c}.g104{background:#7cc0ff}.g105{background:#d68fee}.g106{background:#6fd0dc}.g107{background:#fff}
 
-#alt{display:none;position:fixed;inset:0;box-sizing:border-box;padding:12px;margin:0;overflow:hidden;white-space:pre;word-break:normal;background:#0b0e14;color:#c8d3e0;cursor:text;font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}
+#alt,.alt{display:none;position:absolute;inset:0;box-sizing:border-box;padding:12px;margin:0;overflow:hidden;white-space:pre;word-break:normal;background:#0b0e14;color:#c8d3e0;cursor:text;font:14px/1.35 ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace}

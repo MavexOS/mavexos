@@ -44,7 +44,10 @@
 
   /* ---- Asyncify scheduler: tasks suspend inside blocking imports and are resumed by pump() ---- */
   const AGAIN = 6, EPIPE = 64, AS_UNWIND = 1, AS_REWIND = 2, ASYNC_BUF = 1 << 20;
-  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onOutput: null, onIdle: null, rawTty: false, tty: { icanon: true, echo: true, isig: true }, cols: 80, rows: 24, busy: 0, gen: 0 };
+  const S = { tasks: new Map(), cur: null, pumping: false, timer: 0, onIdle: null, ttys: [], cols: 80, rows: 24, busy: 0, gen: 0 };
+  const newTtyState = () => ({ icanon: true, echo: true, isig: true, raw: false, onOutput: null });
+  S.ttys[0] = newTtyState();
+  const ttyOf = (t) => (t.tty === undefined ? (t.tty = K.x.k_proc_tty(t.pid)) : t.tty);
   const canBlock = (t) => !!t && !t.sync && t.asyncify;
   // Called first in every blockable import: finishes a pending rewind so the import can retry for real.
   function rewound(t) {
@@ -89,7 +92,7 @@
     if (t.asyncify && t.inst.exports.asyncify_get_state() === AS_UNWIND) { t.inst.exports.asyncify_stop_unwind(); t.blocked = true; t.rewinding = true; finished = false; }
     if (finished) { t.done = true; t.blocked = false; S.tasks.delete(t.pid); S.gen++; if (t.onFinish) t.onFinish(code); }
   }
-  function flushOutput() { const n = K.x.k_tty_take(); if (n && S.onOutput) S.onOutput(stagedStr(n)); }
+  function flushOutput() { S.ttys.forEach((ts, i) => { const n = K.x.k_tty_take(i); if (n) { const s = stagedStr(n); if (ts.onOutput) ts.onOutput(s); } }); }
   function pump() {
     if (S.pumping) return;
     S.pumping = true;
@@ -140,18 +143,19 @@
     return out;
   }
   function sendSignal(target, sig) { for (const t of signalTargets(target)) deliver(t, sig); pump(); }
-  function ttySignal(sig) {
-    const fg = K.x.k_tty_get_fg();
+  function ttySignal(tt, sig) {
+    const fg = K.x.k_tty_get_fg(tt);
     if (fg > 0 && signalTargets(-fg).some((t) => !t.shell)) { sendSignal(-fg, sig); return true; }
-    if (sig === SIG.INT) { for (const t of S.tasks.values()) if (!t.shell && !t.daemon) deliver(t, SIG.INT); pump(); return true; }
+    if (sig === SIG.INT) { for (const t of S.tasks.values()) if (!t.shell && !t.daemon && ttyOf(t) === tt) deliver(t, SIG.INT); pump(); return true; }
     return false;
   }
-  function ttySet(m) { const t = S.tty; t.icanon = !!(m & 1); t.echo = !!(m & 2); t.isig = !!(m & 4); S.rawTty = !t.icanon; if (S.onTtyMode) S.onTtyMode(S.rawTty); }
-  const ttyReset = () => ttySet(1 | (S.tty.echo ? 2 : 0) | (S.tty.isig ? 4 : 0));
-  const winch = () => ttySignal(SIG.WINCH);
-  const killForeground = () => ttySignal(SIG.INT);
-  const stopForeground = () => ttySignal(SIG.TSTP);
-  const foregroundBusy = () => [...S.tasks.values()].some((t) => !t.shell && !t.daemon && !t.done);
+  function ttySet(tt, m) { const t = S.ttys[tt]; t.icanon = !!(m & 1); t.echo = !!(m & 2); t.isig = !!(m & 4); t.raw = !t.icanon; }
+  const ttyReset = (tt) => { const t = S.ttys[tt]; ttySet(tt, 1 | (t.echo ? 2 : 0) | (t.isig ? 4 : 0)); };
+  const winch = () => S.ttys.forEach((_, i) => ttySignal(i, SIG.WINCH));
+  const killForeground = (tt) => ttySignal(tt, SIG.INT);
+  const stopForeground = (tt) => ttySignal(tt, SIG.TSTP);
+  const foregroundBusy = (tt) => [...S.tasks.values()].some((t) => !t.shell && !t.daemon && !t.done && ttyOf(t) === tt);
+  function newTty() { const id = K.x.k_tty_new(); S.ttys[id] = newTtyState(); return id; }
 
   /* ---- WASI for one process ---- */
   function makeWasi(pid, getMem, task) {
@@ -408,15 +412,16 @@
         const g = S.gen, end = performance.now() + (ms || 20);
         return block(task, () => S.gen !== g || performance.now() >= end, end);
       },
-      tcsetpgrp(g) { K.x.k_tty_set_fg(g); return 0; },
-      tcgetpgrp: () => K.x.k_tty_get_fg(),
+      tcsetpgrp(g) { K.x.k_tty_set_fg(ttyOf(task), g); return 0; },
+      tcgetpgrp: () => K.x.k_tty_get_fg(ttyOf(task)),
       setpgid: (p, g) => K.x.k_setpgid(p || pid, g),
       getpgid: (p) => K.x.k_getpgid(p || pid),
       setsid: () => K.x.k_setsid(pid),
+      tty_name() { return ttyOf(task) + 1; },
       tty_size(out) { const d = dv(); d.setUint32(out, S.cols, true); d.setUint32(out + 4, S.rows, true); return 0; },
-      tty_raw(on) { ttySet(on ? 4 : 7); return 0; },
-      tty_getattr() { const t = S.tty; return (t.icanon ? 1 : 0) | (t.echo ? 2 : 0) | (t.isig ? 4 : 0); },
-      tty_setattr(m) { ttySet(m); return 0; },
+      tty_raw(on) { ttySet(ttyOf(task), on ? 4 : 7); return 0; },
+      tty_getattr() { const t = S.ttys[ttyOf(task)]; return (t.icanon ? 1 : 0) | (t.echo ? 2 : 0) | (t.isig ? 4 : 0); },
+      tty_setattr(m) { ttySet(ttyOf(task), m); return 0; },
       dup: (fd) => K.x.k_fd_dup(pid, fd),
       park() { throw new ParkSignal(); },
       getcreds(out) { const r = K.x.k_proc_creds(pid); if (r < 0) return r; m8().set(staged(r), out); return 0; },
@@ -441,7 +446,7 @@
       },
       push_shell(cp, cn, ep, en) {
         const cwd = str(cp, cn), env = dec.decode(m8().subarray(ep, ep + en)).split("\0").filter(Boolean);
-        startBrush(cwd, env, pid);
+        startBrush(cwd, env, pid, ttyOf(task));
         return 0;
       },
     };
@@ -492,15 +497,16 @@
   }
 
   /* ---- persistent brush login shell ---- */
-  const B = { pid: 0, task: null, stack: [] };
-  function startBrush(cwd, env, ppid) {
+  const Bs = [];
+  function startBrush(cwd, env, ppid, tt) {
+    tt = tt || 0; const B = Bs[tt] || (Bs[tt] = { pid: 0, task: null, stack: [] });
     const x = K.x, mod = K.modules.brush;
     const [[a, al], [b, bl], [c, cl], [d, dl]] = packed("/bin/brush", "brush\0", env.join("\0") + "\0", cwd);
     const pid = x.k_spawn(ppid || 0, a, al, b, bl, c, cl, d, dl, -1, -1, -1);
     if (pid < 0) throw new Error("brush spawn failed " + pid);
     if (ppid === 1) x.k_force_creds(pid, 1000, 1000);
-    x.k_setsid(pid); x.k_tty_set_fg(pid);
-    const task = makeTask(pid, true); task.shell = true;
+    x.k_set_tty(pid, tt); x.k_setsid(pid); x.k_tty_set_fg(tt, pid);
+    const task = makeTask(pid, true); task.shell = true; task.tty = tt;
     const inst = instantiate(pid, mod, task);
     const prev = S.cur; S.cur = task;
     try { inst.exports._start(); } catch (e) { if (!(e instanceof ParkSignal)) throw e; } finally { S.cur = prev; }
@@ -508,23 +514,23 @@
     if (B.task) B.stack.push({ pid: B.pid, task: B.task });
     B.pid = pid; B.task = task;
   }
-  const brushStr = (ptr) => dec.decode(new Uint8Array(B.task.inst.exports.memory.buffer, ptr, B.task.inst.exports.brush_out_len()));
-  function takeTty() { const n = K.x.k_tty_take(); return n ? stagedStr(n) : ""; }
+  const brushStr = (tt, ptr) => { const ex = Bs[tt].task.inst.exports; return dec.decode(new Uint8Array(ex.memory.buffer, ptr, ex.brush_out_len())); };
+  function takeTty(tt) { const n = K.x.k_tty_take(tt || 0); return n ? stagedStr(n) : ""; }
   function pushHostInfo() {
     const mem = Math.round(((performance.memory && performance.memory.usedJSHeapSize) || K.x.memory.buffer.byteLength) / 1048576);
     const total = Math.max(mem, Math.round((navigator.deviceMemory || 4) * 1024));
     K.x.k_set_hostinfo(total * 1024, mem * 1024, navigator.hardwareConcurrency || 1);
   }
-  function brushRun(line) {
-    pushHostInfo();
+  function brushRun(tt, line) {
+    pushHostInfo(); const B = Bs[tt];
     const task = B.task, ex = task.inst.exports, bs = enc.encode(line), p = ex.brush_alloc(bs.length);
     new Uint8Array(ex.memory.buffer).set(bs, p);
-    K.x.k_tty_flush_input();
+    K.x.k_tty_flush_input(tt);
     return new Promise((resolve) => {
       launch(task, () => { task.result = ex.brush_run(p, bs.length); }, (trapCode) => {
         let code = trapCode === 134 ? 134 : task.result;
         let exited = code <= -1000;
-        let out = takeTty();
+        let out = takeTty(tt);
         if (trapCode === 134) out += "brush: trapped\n";
         if (exited && B.stack.length && B.task === task) {
           K.x.k_proc_exit(B.pid, -1000 - code); K.x.k_wait(B.pid);
@@ -535,17 +541,17 @@
       pump();
     });
   }
-  const brushPrompt = () => brushStr(B.task.inst.exports.brush_prompt()).replace(/[\x01\x02]/g, "");
-  function brushComplete(text) { // text = line up to the cursor
-    if (!B.task || !B.task.inst) return null;
+  const brushPrompt = (tt) => brushStr(tt, Bs[tt].task.inst.exports.brush_prompt()).replace(/[\x01\x02]/g, "");
+  function brushComplete(tt, text) { // text = line up to the cursor
+    const B = Bs[tt]; if (!B || !B.task || !B.task.inst) return null;
     const ex = B.task.inst.exports, bs = enc.encode(text), p = ex.brush_alloc(bs.length);
     new Uint8Array(ex.memory.buffer).set(bs, p);
-    const r = brushStr(ex.brush_complete(p, bs.length, bs.length));
+    const r = brushStr(tt, ex.brush_complete(p, bs.length, bs.length));
     if (!r) return null;
     const lines = r.split("\n"), [ins, del, files] = lines[0].split("\t");
     return { ins: +ins, del: +del, files: files === "1", cands: lines.slice(1).filter((x) => x.length) };
   }
-  const brushCwd = () => brushStr(B.task.inst.exports.brush_cwd());
+  const brushCwd = (tt) => brushStr(tt, Bs[tt].task.inst.exports.brush_cwd());
 
   /* ---- public API ---- */
   async function boot(kernelB64, extraModules) {
@@ -599,5 +605,5 @@
     }
   }
 
-  window.MavexRuntime = { brushComplete, ttyReset, winch, startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
+  window.MavexRuntime = { brushComplete, ttyReset, winch, startInit, startProcess, S, pump, killForeground, stopForeground, sendSignal, foregroundBusy, startBrush, newTty, brushRun, brushPrompt, brushCwd, takeTty, boot, registerModule, install, installSetuid, K, packed, staged, stagedStr, scratch };
 })();

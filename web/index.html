@@ -7,11 +7,16 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="screen">
-  <pre id="out"></pre>
-  <pre id="line"><span id="prompt"></span><span id="before"></span><span id="cur"> </span><span id="after"></span></pre>
+<div id="tabs"></div>
+<div id="terms">
+  <div class="term" id="term0">
+    <div class="screen" id="screen">
+      <pre class="out" id="out"></pre>
+      <pre class="line" id="line"><span class="prompt" id="prompt"></span><span class="before" id="before"></span><span class="cursor" id="cur"> </span><span class="after" id="after"></span></pre>
+    </div>
+    <pre class="alt" id="alt"></pre>
+  </div>
 </div>
-<pre id="alt"></pre>
 <textarea id="sink" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
 <script src="kernel.wasm.js"></script>
 <script src="coreutils.wasm.js"></script>

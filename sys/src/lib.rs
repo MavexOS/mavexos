@@ -107,6 +107,7 @@ pub struct Proc {
     pub start_ms: u64,
     pub pgid: u32,
     pub sid: u32,
+    pub tty: u32,
     fds: BTreeMap<u32, Fd>,
 }
 
@@ -118,10 +119,15 @@ pub struct Sys {
     default_cred: (u32, u32),
     pub net: net::Net,
     pub hostinfo: procfs::HostInfo,
-    pub tty_out: Vec<u8>,
-    pub tty_in: VecDeque<u8>,
-    pub tty_eof: bool,
-    pub tty_fg: u32,
+    pub ttys: Vec<Tty>,
+}
+
+#[derive(Default)]
+pub struct Tty {
+    pub out: Vec<u8>,
+    pub inp: VecDeque<u8>,
+    pub eof: bool,
+    pub fg: u32,
 }
 
 pub struct DirEnt {
@@ -132,7 +138,24 @@ pub struct DirEnt {
 
 impl Sys {
     pub fn new(vfs: Vfs) -> Self {
-        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), tty_out: Vec::new(), tty_in: VecDeque::new(), tty_eof: false, tty_fg: 0 }
+        Sys { vfs, procs: BTreeMap::new(), pipes: Vec::new(), next_pid: 1, default_cred: (0, 0), net: net::Net::new(), hostinfo: procfs::HostInfo::default(), ttys: vec![Tty::default()] }
+    }
+
+    pub fn new_tty(&mut self) -> u32 {
+        self.ttys.push(Tty::default());
+        (self.ttys.len() - 1) as u32
+    }
+
+    pub fn tty_of(&self, pid: u32) -> u32 {
+        self.procs.get(&pid).map_or(0, |p| p.tty)
+    }
+
+    pub fn set_tty(&mut self, pid: u32, tty: u32) {
+        if (tty as usize) < self.ttys.len() {
+            if let Some(p) = self.procs.get_mut(&pid) {
+                p.tty = tty;
+            }
+        }
     }
 
     pub fn set_default_creds(&mut self, uid: u32, gid: u32) {
@@ -225,7 +248,7 @@ impl Sys {
         match &f.kind {
             FdKind::PipeR(i) if !write => self.pipes.get(*i).and_then(|p| p.as_ref()).is_none_or(|p| !p.buf.is_empty() || p.writers == 0),
             FdKind::PipeW(i) if write => self.pipes.get(*i).and_then(|p| p.as_ref()).is_none_or(|p| p.buf.len() < PIPE_CAP || p.readers == 0),
-            FdKind::Tty if !write => !self.tty_in.is_empty() || self.tty_eof,
+            FdKind::Tty if !write => { let t = &self.ttys[self.tty_of(pid) as usize]; !t.inp.is_empty() || t.eof }
             _ => true,
         }
     }
@@ -342,7 +365,8 @@ impl Sys {
         }
         self.next_pid += 1;
         let (pgid, sid) = self.procs.get(&ppid).map_or((pid, pid), |pp| (pp.pgid, pp.sid));
-        self.procs.insert(pid, Proc { pgid, sid, ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, cpu_ms: 0, rss_kib: 0, state: b'R', start_ms: self.hostinfo.now_ns / 1_000_000, fds: BTreeMap::new() });
+        let tty = self.procs.get(&ppid).map_or(0, |pp| pp.tty);
+        self.procs.insert(pid, Proc { pgid, sid, tty, ppid, argv, env, cwd: cwd.clone(), exe, exit: None, uid, gid, euid, egid, cpu_ms: 0, rss_kib: 0, state: b'R', start_ms: self.hostinfo.now_ns / 1_000_000, fds: BTreeMap::new() });
         for (i, s) in stdio.iter().enumerate() {
             let kind = match *s {
                 Stdio::Tty => FdKind::Tty,
@@ -549,14 +573,16 @@ impl Sys {
             },
             FdKind::PipeW(_) => Err(errno::BADF),
             FdKind::Tty => {
-                if self.tty_in.is_empty() {
-                    if std::mem::take(&mut self.tty_eof) {
+                let ti = self.tty_of(pid) as usize;
+                let t = &mut self.ttys[ti];
+                if t.inp.is_empty() {
+                    if std::mem::take(&mut t.eof) {
                         return Ok(Vec::new());
                     }
                     return Err(errno::AGAIN);
                 }
-                let n = len.min(self.tty_in.len());
-                Ok(self.tty_in.drain(..n).collect())
+                let n = len.min(t.inp.len());
+                Ok(t.inp.drain(..n).collect())
             }
             FdKind::Null => Ok(Vec::new()),
         }
@@ -592,7 +618,8 @@ impl Sys {
             },
             FdKind::PipeR(_) => Err(errno::BADF),
             FdKind::Tty => {
-                self.tty_out.extend_from_slice(data);
+                let ti = self.tty_of(pid) as usize;
+                self.ttys[ti].out.extend_from_slice(data);
                 Ok(data.len())
             }
             FdKind::Null => Ok(data.len()),
@@ -781,7 +808,7 @@ mod tests {
         s.fd_write(c, 2, b"err").unwrap();
         s.exit(c, 0);
         assert_eq!(s.pipe_drain(out), b"out");
-        assert_eq!(s.tty_out, b"err");
+        assert_eq!(s.ttys[0].out, b"err");
         assert_eq!(s.fd_type(c, 1), Err(errno::BADF));
         s.wait(c).unwrap();
         s.pipe_release(inp);

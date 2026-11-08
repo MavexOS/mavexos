@@ -6,6 +6,7 @@ unsafe extern "C" {
     fn tty_getattr() -> i32;
     fn tty_setattr(mask: i32) -> i32;
     fn tty_size(out: *mut u32) -> i32;
+    fn tty_name() -> i32;
 }
 
 const ICANON: i32 = 1;
@@ -19,7 +20,7 @@ fn size() -> (u32, u32) {
 }
 
 pub fn tty(_args: &[String]) -> i32 {
-    if std::io::stdin().is_terminal() { println!("/dev/tty1"); 0 } else { println!("not a tty"); 1 }
+    if std::io::stdin().is_terminal() { println!("/dev/tty{}", unsafe { tty_name() }); 0 } else { println!("not a tty"); 1 }
 }
 
 fn flag(name: &str) -> Option<i32> {

@@ -20,7 +20,7 @@
   const MODES = /\x1b\[\?([0-9;]+)([hl])/g;
   const ENTER = /\x1b\[\?(1049|1047|47)h/, LEAVE = /\x1b\[\?(1049|1047|47)l/;
 
-  const vt = {
+  const make = () => ({
     active: false, rows: 24, cols: 80, g: [], cx: 0, cy: 0, a: DEF, saved: null, top: 0, bot: 23, curVis: true, state: 0, buf: "", dirty: false, onReply: null, el: null, esc: "", mouse: 0, mouseSgr: false, mouseMotion: 0, paste: false, appCursor: false,
     resetModes() { this.mouse = 0; this.mouseSgr = false; this.mouseMotion = 0; this.paste = false; this.appCursor = false; },
     setMode(list, on) {
@@ -32,7 +32,7 @@
         else if (n === 1) this.appCursor = on;
       }
     },
-    init(el) { this.el = el; },
+    init(el, scr) { this.el = el; this.scr = scr; },
     resize(cols, rows) {
       if (cols === this.cols && rows === this.rows && this.g.length) return;
       const g = [];
@@ -43,11 +43,11 @@
     enter() {
       this.active = true; this.g = []; this.cx = this.cy = 0; this.a = DEF; this.top = 0; this.bot = this.rows - 1; this.curVis = true; this.state = 0; this.esc = "";
       const rows = this.rows, cols = this.cols; this.rows = this.cols = 0; this.resize(cols, rows);
-      this.el.style.display = "block"; document.getElementById("screen").style.display = "none";
+      this.el.style.display = "block"; this.scr.style.display = "none";
     },
     leave() {
       if (!this.active) return;
-      this.active = false; this.el.style.display = "none"; document.getElementById("screen").style.display = "";
+      this.active = false; this.el.style.display = "none"; this.scr.style.display = "";
     },
     /* Splits `text` into the part for the normal scrollback and the part consumed by the grid. Returns the normal part. */
     process(text) {
@@ -189,6 +189,6 @@
       }
       this.el.innerHTML = html;
     },
-  };
-  window.MavexVT = vt;
+  });
+  window.MavexVT = { create(el, scr) { const v = make(); v.init(el, scr); return v; } };
 })();

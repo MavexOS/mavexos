@@ -205,6 +205,21 @@ async function runBrush(name, type) {
   a = await alt();
   if (!/\^\[\[<0;\d+;\d+M/.test(a.text)) fails.push("mouse click reported in SGR mode: " + JSON.stringify(a.text.slice(0, 200)));
   await p.keyboard.press("Control+d"); await w(800);
+  await p.keyboard.press("Control+Alt+t"); await w(2500);
+  await ty("echo second-tab; tty"); await w(800);
+  const t2 = await p.evaluate(() => [...document.querySelectorAll(".term")].map((t) => ({ on: t.classList.contains("on"), text: t.innerText })));
+  if (t2.length !== 2 || !t2[1].on || t2[0].on) fails.push("new tab created and focused");
+  if (!/\nsecond-tab\n\/dev\/tty2\n/.test(t2[1].text)) fails.push("second tab runs its own shell and tty");
+  if (t2[0].text.includes("second-tab")) fails.push("tab output isolated");
+  await ty("sleep 30 &"); await w(500);
+  await p.keyboard.press("Alt+1"); await w(500);
+  await ty("jobs; echo tab1-jobs-done"); await w(800);
+  const t3 = await p.evaluate(() => [...document.querySelectorAll(".term")].map((t) => t.innerText));
+  if (/sleep 30/.test(t3[0].split("tab1-jobs-done").slice(-2)[0].split("jobs; echo tab1")[1] || "")) fails.push("bg job leaked across tabs");
+  await p.keyboard.press("Alt+2"); await w(300);
+  await ty("exit"); await w(1500);
+  const t4 = await p.evaluate(() => ({ n: document.querySelectorAll(".term").length, on: document.querySelector(".term.on").id }));
+  if (t4.n !== 1 || t4.on !== "term0") fails.push("exit closes tab");
   if (!/\n\/home\/user\n/.test(lt.slice(lt.lastIndexOf("tabtest")))) fails.push("tab completes variable");
   const t = await text(p);
   if (!t.includes("top-done") || !t.includes("Tasks:")) fails.push("top -b batch mode and shell survives");
@@ -222,8 +237,11 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.16\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.17\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
+  await ty("seq 1 7000"); await w(3000);
+  const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
+  if (sb > 5200) fails.push("scrollback capped");
   if (errs.length) fails.push("pageerror: " + errs.join("; "));
   console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (brush)`, fails.length ? fails : "");
   if (fails.length) { failed = true; console.log(t.slice(-5000)); }
