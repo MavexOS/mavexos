@@ -1,6 +1,6 @@
 [package]
 name = "mavex-utils"
-version = "0.0.19"
+version = "0.0.20"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -13,3 +13,4 @@ base64 = "0.22"
 boringtun = { version = "0.7.1", default-features = false }
 getrandom = "0.2"
 regex-lite = "0.1"
+sha2 = "0.10"

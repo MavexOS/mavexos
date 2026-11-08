@@ -439,11 +439,11 @@ async function boot() {
   await publishSysfs();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "less", "more", "man", "edit"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit"]);
   R.install("rg", []);
   R.install("crabfetch", []);
   R.install("init", ["systemctl", "journalctl"]);
-  R.installSetuid("mavexutils", ["sudo", "su"]);
+  R.installSetuid("mavexutils", ["sudo", "su", "passwd"]);
   R.startInit();
   for (let i = 0; i < 60 && typeof sys.readFile("/run/mavex-init/booted") !== "string"; i++) await sleep(50);
   if (useBrush) startLogin(0);

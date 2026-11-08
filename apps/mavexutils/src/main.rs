@@ -3,6 +3,8 @@
 //! of an iproute2-compatible subset over the kernel's virtual netns (netlink-like requests).
 mod ip;
 mod proc;
+mod paths;
+mod auth;
 mod pager;
 mod editor;
 mod stty;
@@ -86,7 +88,7 @@ fn group_name(gid: u32) -> String {
     groups_db().into_iter().find(|g| g.gid == gid).map(|g| g.name).unwrap_or_else(|| gid.to_string())
 }
 
-fn lookup_user(s: &str) -> Option<User> {
+pub fn lookup_user(s: &str) -> Option<User> {
     users().into_iter().find(|u| u.name == s || s.parse::<u32>().is_ok_and(|n| n == u.uid))
 }
 
@@ -370,8 +372,10 @@ fn cmd_sudo(args: &[String]) -> i32 {
         return 1;
     };
     if ruid != 0 && !rule.allow_nopasswd {
-        eprintln!("sudo: a password is required (interactive password prompts are not supported yet)");
-        return 1;
+        if !auth::authenticate(&me, &format!("[sudo] password for {me}: "), 3) {
+            eprintln!("sudo: {}", if auth::shadow_field(&me).is_some_and(|f| auth::is_locked(&f)) { "account has no password set (run `sudo passwd` as an allowed user or `passwd`)".to_string() } else { "3 incorrect password attempts".to_string() });
+            return 1;
+        }
     }
     if unsafe { setcreds(tu.uid, tu.gid) } < 0 { eprintln!("sudo: effective uid is not 0, is /bin/sudo setuid root?"); return 1; }
     let extra = [("SUDO_USER", me.clone()), ("SUDO_UID", ruid.to_string()), ("SUDO_GID", mu.gid.to_string()), ("SUDO_COMMAND", cmd.join(" "))];
@@ -406,9 +410,7 @@ fn cmd_su(args: &[String]) -> i32 {
     }
     let Some(tu) = lookup_user(&target) else { eprintln!("su: user {target} does not exist or the user entry does not contain all the required fields"); return 1; };
     if ruid != 0 {
-        let shadow = std::fs::read_to_string("/etc/shadow").unwrap_or_default();
-        let field = shadow.lines().find_map(|l| { let f: Vec<&str> = l.split(':').collect(); (f.first() == Some(&tu.name.as_str())).then(|| f.get(1).copied().unwrap_or("!").to_string()) }).unwrap_or_else(|| "!".into());
-        if !field.is_empty() {
+        if !auth::authenticate(&tu.name, "Password: ", 1) {
             eprintln!("su: Authentication failure");
             return 1;
         }
@@ -438,6 +440,9 @@ fn main() {
         "stat" => cmd_stat(&args),
         "sudo" => cmd_sudo(&args),
         "su" => cmd_su(&args),
+        "realpath" => paths::realpath(&args),
+        "readlink" => paths::readlink(&args),
+        "passwd" => auth::passwd(&args),
         "ip" => ip::main(&args),
         "wg" => wg::wg(&args),
         "wg-quick" => wg::wg_quick(&args),

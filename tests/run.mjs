@@ -209,6 +209,15 @@ async function runBrush(name, type) {
   const ed = await text(p);
   if (!/\nhello editor\nline two\n/.test(ed)) fails.push("edit saves file: " + JSON.stringify(ed.slice(-300)));
   if (!/No manual entry|LS|ls /.test(ed)) fails.push("man shows something");
+  await ty("ln -s /tmp /home/user/lnk; realpath lnk/../x; realpath -m /a/b/../c; readlink -f lnk; readlink lnk; realpath -e /nonexistent; echo rc=$?"); await w(1200);
+  await ty("passwd user"); await w(600); await ty("hunter2"); await w(300); await ty("hunter2"); await w(800);
+  await ty("echo '%sudo ALL=(ALL) ALL' > /etc/sudoers; su user"); await w(1500);
+  await ty("sudo id"); await w(800); await ty("wrong"); await w(1500); await ty("hunter2"); await w(1500);
+  await ty("exit"); await w(800);
+  await ty("echo '%sudo ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers; echo restored"); await w(800);
+  const pw = await text(p);
+  if (!/\n\/x\n\/a\/c\n\/tmp\n\/tmp\n/.test(pw) || !/realpath: \/nonexistent: No such file/.test(pw) || !/rc=1/.test(pw)) fails.push("realpath/readlink: " + JSON.stringify(pw.slice(-900)));
+  if (!/password updated successfully/.test(pw) || !/\[sudo\] password for user: /.test(pw) || !/Sorry, try again\./.test(pw) || !/uid=0\(root\)/.test(pw.slice(pw.lastIndexOf("Sorry, try again."))) || /hunter2\n/.test(pw.replace(/passwd user\n/, "")) && /\nhunter2/.test(pw)) fails.push("passwd + sudo prompt: " + JSON.stringify(pw.slice(-900)));
   await ty("sleep 77 & sleep 78 &"); await w(600);
   await ty("ps | head -3; pgrep -x sleep | wc -l; pkill -f 'sleep 77'; sleep 0.5; pgrep -f 'sleep 77' || echo gone77; echo hi > in.txt; nohup echo nohup-ok; cat nohup.out; pkill sleep"); await w(2500);
   const ps = await text(p);
@@ -257,7 +266,7 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.19\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.20\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
