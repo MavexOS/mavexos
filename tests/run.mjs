@@ -193,6 +193,10 @@ async function runBrush(name, type) {
   if (!st.includes("tty-got=hidden-pw-text")) fails.push("stty -echo input still read");
   if (/\nhidden-pw-text\n/.test(st)) fails.push("stty -echo hides typed text");
   if (!/\n\d+ \d+\n\/dev\/tty1\n/.test(st)) fails.push("stty size and tty");
+  await ty("sleep 77 & sleep 78 &"); await w(600);
+  await ty("ps | head -3; pgrep -x sleep | wc -l; pkill -f 'sleep 77'; sleep 0.5; pgrep -f 'sleep 77' || echo gone77; echo hi > in.txt; nohup echo nohup-ok; cat nohup.out; pkill sleep"); await w(2500);
+  const ps = await text(p);
+  if (!/PID TTY\s+TIME CMD/.test(ps) || !/\n\d+\n/.test(ps) || !/\ngone77\n/.test(ps) || !/nohup: ignoring input and appending output to 'nohup.out'/.test(ps) || !/\nnohup-ok\n/.test(ps)) fails.push("ps/pgrep/pkill/nohup: " + JSON.stringify(ps.slice(-500)));
   await p.keyboard.type("echo tabtest /tm"); await p.keyboard.press("Tab"); await w(500); await p.keyboard.press("Enter"); await w(800);
   await p.keyboard.type("echo zzz"); await p.keyboard.press("Control+r"); await p.keyboard.type("tabt"); await w(300); await p.keyboard.press("Enter"); await w(800);
   await p.keyboard.type("echo $PW"); await p.keyboard.press("Tab"); await w(500); await p.keyboard.press("Enter"); await w(800);
@@ -237,7 +241,7 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.17\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.18\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
