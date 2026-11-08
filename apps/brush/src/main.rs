@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 
+mod bg;
 mod kill;
 use brush_builtins::{BuiltinSet, ShellBuilderExt};
 use brush_core::{Shell, extensions::DefaultShellExtensions};
@@ -7,6 +8,7 @@ use brush_core::{Shell, extensions::DefaultShellExtensions};
 #[link(wasm_import_module = "mavex")]
 unsafe extern "C" {
     fn park();
+    fn sig_take() -> u32;
 }
 
 thread_local! {
@@ -17,6 +19,18 @@ thread_local! {
 
 fn block<T>(f: impl std::future::Future<Output = T>) -> T {
     RT.with(|r| r.borrow().as_ref().unwrap().block_on(f))
+}
+
+fn run_pending_traps(sh: &mut Shell<DefaultShellExtensions>) {
+    let pending = unsafe { sig_take() };
+    for n in 1..=32i32 {
+        if pending & (1 << (n - 1)) == 0 { continue; }
+        let Ok(ts) = brush_core::traps::TrapSignal::try_from(n) else { continue };
+        if let Some(h) = sh.traps().get_handler(ts).cloned() {
+            let params = sh.default_exec_params();
+            let _ = block(sh.run_string(h.command, &brush_core::SourceInfo::from("<trap>"), &params));
+        }
+    }
 }
 
 fn drive_jobs() {
@@ -35,6 +49,7 @@ fn main() {
         Shell::builder()
             .default_builtins(BuiltinSet::BashMode)
             .builtin("kill", brush_core::builtins::builtin::<kill::KillCommand, brush_core::extensions::DefaultShellExtensions>())
+            .builtin("bg", brush_core::builtins::builtin::<bg::BgCommand, brush_core::extensions::DefaultShellExtensions>())
             .interactive(true)
             .profile(brush_core::ProfileLoadBehavior::Skip)
             .rc(brush_core::RcLoadBehavior::Skip)
@@ -84,7 +99,7 @@ fn main() {
         let mut g = c.borrow_mut();
         let sh = g.as_mut().unwrap();
         let params = sh.default_exec_params();
-        let rc = concat!("export BRUSH_VERSION=", env!("CARGO_PKG_VERSION"), "; [ -r /etc/profile ] && . /etc/profile; [ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"; true");
+        let rc = concat!("export BRUSH_VERSION=", env!("CARGO_PKG_VERSION"), "; [ -f /etc/profile ] && . /etc/profile; [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"; true");
         let _ = block(sh.run_string(rc.to_string(), &brush_core::SourceInfo::from("<rc>"), &params));
     });
     unsafe { park() };
@@ -119,6 +134,7 @@ pub extern "C" fn brush_run(ptr: i32, len: i32) -> i32 {
         let _ = sh.add_to_history(&line);
         let r = block(sh.run_string(line, &brush_core::SourceInfo::from("<tty>"), &params));
         drive_jobs();
+        run_pending_traps(sh);
         match r {
             Ok(res) => {
                 let code: u8 = res.exit_code.into();

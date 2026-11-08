@@ -139,6 +139,8 @@ struct App {
     mem: Mem,
     msg: String,
     prompt: Option<String>,
+    search: Option<String>,
+    help: bool,
 }
 
 impl App {
@@ -275,7 +277,13 @@ impl App {
             if self.htop && i == self.sel { lines.push(format!("\x1b[38;2;11;14;20;46m{t}\x1b[0m")); } else { lines.push(t); }
         }
         while lines.len() < rows.saturating_sub(1) { lines.push(String::new()); }
-        let foot = if let Some(p) = &self.prompt {
+        if self.help {
+            let help = ["htop (MavexOS own implementation)", "", " Up/Down PgUp/PgDn Home/End  move selection", " F3 or /    search command (Enter accepts, F3 = next)", " F5 or t    toggle tree view", " F6         cycle sort column (P cpu, M mem, T time, N pid)", " F9 or k    send SIGTERM to selected process", " I          reverse sort", " F10 or q    quit", "", " press any key to close"];
+            for (i, h) in help.iter().enumerate() { if let Some(l) = lines.get_mut(2 + i) { *l = format!("\x1b[7m {:<w$}\x1b[0m", h, w = cols.saturating_sub(2)); } }
+        }
+        let foot = if let Some(q) = &self.search {
+            format!("\x1b[1mSearch: {q}\x1b[0m")
+        } else if let Some(p) = &self.prompt {
             format!("\x1b[1mPID to kill: {p}\x1b[0m")
         } else if !self.msg.is_empty() {
             format!("\x1b[1;33m{}\x1b[0m", self.msg)
@@ -300,6 +308,24 @@ impl App {
 
     /// Returns false to quit.
     fn key(&mut self, k: &[u8], page: usize) -> bool {
+        if self.help { self.help = false; return true; }
+        if let Some(q) = self.search.as_mut() {
+            match k {
+                b"\r" | b"\n" | b"\x1b" | b"\x03" => self.search = None,
+                b"\x7f" => { q.pop(); }
+                [c] if *c >= 32 => q.push(*c as char),
+                b"\x1b[13~" | b"\x1b[R" => {}
+                _ => {}
+            }
+            if let Some(q) = self.search.clone() {
+                if !q.is_empty() {
+                    let n = self.procs.len();
+                    let from = if k == b"\x1b[13~" || k == b"\x1b[R" { self.sel + 1 } else { self.sel };
+                    if let Some(i) = (0..n).map(|d| (from + d) % n.max(1)).find(|i| self.procs[*i].cmd.to_lowercase().contains(&q.to_lowercase())) { self.sel = i; }
+                }
+            }
+            return true;
+        }
         if let Some(p) = self.prompt.as_mut() {
             match k {
                 b"\r" | b"\n" => {
@@ -320,6 +346,8 @@ impl App {
         let last = self.procs.len().saturating_sub(1);
         match k {
             b"q" | b"\x1b[21~" | b"\x03" => return false,
+            b"\x1b[11~" | b"\x1b[P" | b"?" if self.htop => self.help = true,
+            b"\x1b[13~" | b"\x1b[R" | b"/" if self.htop => self.search = Some(String::new()),
             b"\x1b[A" => self.sel = self.sel.saturating_sub(1),
             b"\x1b[B" => self.sel = (self.sel + 1).min(last),
             b"\x1b[5~" => self.sel = self.sel.saturating_sub(page),
@@ -384,7 +412,7 @@ pub fn run(name: &str, args: &[String]) -> i32 {
         }
     }
     let us = users();
-    let mut app = App { htop, sort: Sort::Cpu, rev: false, tree: false, sel: 0, scroll: 0, procs: Vec::new(), prev: HashMap::new(), prev_cpu: cpu_times(), cpu_pct: 0.0, mem: meminfo(), msg: String::new(), prompt: None };
+    let mut app = App { htop, sort: Sort::Cpu, rev: false, tree: false, sel: 0, scroll: 0, procs: Vec::new(), prev: HashMap::new(), prev_cpu: cpu_times(), cpu_pct: 0.0, mem: meminfo(), msg: String::new(), prompt: None, search: None, help: false };
     let mut last = Instant::now();
     app.sample(1.0, &us);
     if batch {

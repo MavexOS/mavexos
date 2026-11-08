@@ -159,6 +159,13 @@ async function runBrush(name, type) {
   for (const w of ["CPU[", "Mem[", "Tasks:", "Command", "init", "brush", "F10Quit"]) if (!a.text.includes(w)) fails.push("htop shows " + w);
   await p.keyboard.press("ArrowDown"); await p.keyboard.press("F6");
   await new Promise((r) => setTimeout(r, 400));
+  await p.keyboard.press("F1"); await new Promise((r) => setTimeout(r, 500));
+  a = await alt();
+  if (!a.text.includes("htop (MavexOS own implementation)")) fails.push("htop F1 help");
+  await p.keyboard.press("x"); await p.keyboard.press("F3"); await p.keyboard.type("init"); await new Promise((r) => setTimeout(r, 500));
+  a = await alt();
+  if (!a.text.includes("Search: init")) fails.push("htop F3 search");
+  await p.keyboard.press("Enter"); await new Promise((r) => setTimeout(r, 300));
   await p.keyboard.press("q");
   await new Promise((r) => setTimeout(r, 800));
   a = await alt();
@@ -218,6 +225,13 @@ async function runBrush(name, type) {
   const pw = await text(p);
   if (!/\n\/x\n\/a\/c\n\/tmp\n\/tmp\n/.test(pw) || !/realpath: \/nonexistent: No such file/.test(pw) || !/rc=1/.test(pw)) fails.push("realpath/readlink: " + JSON.stringify(pw.slice(-900)));
   if (!/password updated successfully/.test(pw) || !/\[sudo\] password for user: /.test(pw) || !/Sorry, try again\./.test(pw) || !/uid=0\(root\)/.test(pw.slice(pw.lastIndexOf("Sorry, try again."))) || /hunter2\n/.test(pw.replace(/passwd user\n/, "")) && /\nhunter2/.test(pw)) fails.push("passwd + sudo prompt: " + JSON.stringify(pw.slice(-900)));
+  await ty("trap 'echo got-usr1' USR1; kill -USR1 $$; trap 'echo got-int' INT; echo bg-started"); await w(1200);
+  await ty("sleep 31"); await w(600); await p.keyboard.press("Control+z"); await w(900);
+  await ty("bg; echo bgdone"); await w(800);
+  const tr = await text(p);
+  if (!/\ngot-usr1\n/.test(tr)) fails.push("trap on real signal USR1: " + JSON.stringify(tr.slice(-600)));
+  if (!/\[\d+\]\+? sleep 30 & sleep 31 &/.test(tr) && !/\[\d+\]\+? .*sleep.* &\n/.test(tr)) fails.push("bg prints job line: " + JSON.stringify(tr.slice(-600)));
+  await ty("pkill sleep; trap - INT USR1"); await w(800);
   await ty("sleep 77 & sleep 78 &"); await w(600);
   await ty("ps | head -3; pgrep -x sleep | wc -l; pkill -f 'sleep 77'; sleep 0.5; pgrep -f 'sleep 77' || echo gone77; echo hi > in.txt; nohup echo nohup-ok; cat nohup.out; pkill sleep"); await w(2500);
   const ps = await text(p);
@@ -228,7 +242,7 @@ async function runBrush(name, type) {
   const lt = await text(p);
   if ((lt.match(/\ntabtest \/tmp\/\n/g) || []).length !== 2) fails.push("tab completes path; ctrl-r runs history match");
   await ty("printf '\\033[?1049h\\033[?1000h\\033[?1006h\\033[?2004h\\033[5;5H'; cat -v; printf '\\033[?1049l'"); await w(1200);
-  const ab = await p.locator("#alt").boundingBox();
+  const ab = await p.locator("#alt").boundingBox() || (console.log("DBG", JSON.stringify((await text(p)).slice(-700))), {x:0,y:0});
   await p.mouse.click(ab.x + 100, ab.y + 60); await w(400);
   await p.keyboard.press("Enter"); await w(500);
   a = await alt();
@@ -266,7 +280,7 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.20\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.21\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);

@@ -131,7 +131,7 @@
     if (sig === SIG.CONT) { const was = t.stopped; t.stopped = false; t.sigPending |= bit; if (was) S.gen++; return; }
     if (sig === SIG.STOP) { t.stopped = true; S.gen++; return; }
     if (t.sigIgnore & bit) return;
-    if (t.shell) { t.sigPending |= bit; if (STOPPING.has(sig) || IGNORED_BY_DEFAULT.has(sig) || sig === SIG.INT || sig === SIG.TERM || sig === SIG.HUP || sig === SIG.QUIT) return; t.killed = true; t.killCode = 128 + sig; S.gen++; return; }
+    if (t.shell) { t.sigPending |= bit; return; }
     if (STOPPING.has(sig)) { t.stopped = true; S.gen++; return; }
     if (IGNORED_BY_DEFAULT.has(sig)) { t.sigPending |= bit; return; }
     t.killed = true; t.killCode = 128 + sig; S.gen++;
@@ -145,7 +145,7 @@
   function sendSignal(target, sig) { for (const t of signalTargets(target)) deliver(t, sig); pump(); }
   function ttySignal(tt, sig) {
     const fg = K.x.k_tty_get_fg(tt);
-    if (fg > 0 && signalTargets(-fg).some((t) => !t.shell)) { sendSignal(-fg, sig); return true; }
+    if (fg > 0 && signalTargets(-fg).some((t) => !t.shell)) { sendSignal(-fg, sig); for (const t of S.tasks.values()) if (t.shell && ttyOf(t) === tt ) t.sigPending |= 1 << (sig - 1); return true; }
     if (sig === SIG.INT) { for (const t of S.tasks.values()) if (!t.shell && !t.daemon && ttyOf(t) === tt) deliver(t, SIG.INT); pump(); return true; }
     return false;
   }

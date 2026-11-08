@@ -74,6 +74,8 @@ const prompt = () => (useBrush ? R.brushPrompt(tt) : staged(K.k_shell_prompt()))
 const exited = () => (useBrush ? brushExited : K.k_shell_exited() === 1);
 const reset = () => { if (useBrush) { brushExited = false; startLogin(tt); } else K.k_shell_reset(); };
 let pendingScroll = false;
+const HIST = "/home/user/.bash_history";
+let histLoaded = false;
 let buf = "", pos = 0, history = [], hidx = 0, draft = "", promptText = "", live = false, dead = false;
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 function renderPrompt() {
@@ -97,7 +99,7 @@ function renderLine() {
   scrollDown();
 }
 function showLine(show) { lineEl.style.display = show ? "" : "none"; }
-function newPrompt() { promptText = prompt(); renderPrompt(); buf = ""; pos = 0; hidx = history.length; renderLine(); showLine(true); live = true; }
+function newPrompt() { if (!histLoaded) { histLoaded = true; const h = sys.readFile(HIST); if (typeof h === "string") history = h.split("\n").filter(Boolean).slice(-1000); } promptText = prompt(); renderPrompt(); buf = ""; pos = 0; hidx = history.length; renderLine(); showLine(true); live = true; }
 
 function commitInput(extra) {
   write(promptText); // colored prompt echo
@@ -106,7 +108,7 @@ function commitInput(extra) {
 let running = false;
 vt.onReply = (s) => feed(s);
 const feed = (str) => { const b = enc.encode(str), [p, n] = put(b); try { K.k_tty_input(tt, p, n); } finally { K.k_free(p, n); } R.pump(); };
-const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~" };
+const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~", Insert: "\x1b[2~", F1: "\x1bOP", F2: "\x1bOQ", F3: "\x1bOR", F4: "\x1bOS", F5: "\x1b[15~", F6: "\x1b[17~", F7: "\x1b[18~", F8: "\x1b[19~", F9: "\x1b[20~", F10: "\x1b[21~", F11: "\x1b[23~", F12: "\x1b[24~" };
 function rawKey(e) {
   const k = e.key;
   if (e.ctrlKey && !e.altKey && !e.metaKey && k.length === 1) {
@@ -132,7 +134,7 @@ async function enter() {
   if (dead && tabs.list.length > 1) { closeTab(self); return; }
   if (dead) { write(promptText + "\n"); dead = false; reset(); write("\x1b[0m"); newPrompt(); return; }
   commitInput();
-  if (line.trim() && history[history.length - 1] !== line) history.push(line);
+  if (line.trim() && history[history.length - 1] !== line) { history.push(line); if (history.length > 1000) history.shift(); sys.writeFile(HIST, history.join("\n") + "\n"); }
   if (line.trim()) await runLine(line);
   if (exited() && tabs.list.length > 1) { closeTab(self); return; }
   if (exited()) { dead = true; write("\n[process completed - press Enter to restart]\n"); promptText = ""; buf = ""; pos = 0; renderPrompt(); renderLine(); live = true; return; }

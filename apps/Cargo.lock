@@ -1894,7 +1894,7 @@ version = "0.0.2"
 
 [[package]]
 name = "mavex-utils"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "base64",
  "boringtun",
