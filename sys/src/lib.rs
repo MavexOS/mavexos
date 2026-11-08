@@ -476,6 +476,11 @@ impl Sys {
         self.enter(pid);
         let abs = self.resolve(pid, dirfd, path)?;
         if procfs::is_proc(&abs) { self.refresh_procfs(); self.enter(pid); }
+        match abs.as_str() {
+            "/dev/tty" => return self.open_fd(pid, Fd { kind: FdKind::Tty, preopen: None }),
+            "/dev/null" => return self.open_fd(pid, Fd { kind: FdKind::Null, preopen: None }),
+            _ => {}
+        }
         match self.vfs.stat(&abs) {
             Ok(st) if st.kind == Kind::Dir => {
                 if creat && excl {

@@ -669,10 +669,11 @@ pub extern "C" fn kmain() {
     print("[ ok ] memory: wasm linear memory, RAM-only (nothing persists yet)\n");
     with_sys(|s| {
         let v = &mut s.vfs;
-        for d in ["/bin", "/etc", "/home", "/home/user", "/tmp", "/usr"] {
+        for d in ["/bin", "/dev", "/etc", "/home", "/home/user", "/tmp", "/usr"] {
             v.mkdir(d, 0o755).unwrap();
         }
         v.chmod("/tmp", 0o1777).unwrap();
+        for f in ["/dev/null", "/dev/tty"] { v.write_file(f, b"").unwrap(); v.chmod(f, 0o666).unwrap(); }
         v.write_file("/etc/hostname", b"mavex\n").unwrap();
         v.write_file("/etc/os-release", format!("NAME=\"MavexOS\"\nPRETTY_NAME=\"MavexOS\"\nVERSION=\"{0}\"\nVERSION_ID=\"{0}\"\nID=mavexos\nHOME_URL=\"https://github.com/MavexOS\"\n", ver).as_bytes()).unwrap();
         v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
@@ -684,7 +685,7 @@ pub extern "C" fn kmain() {
         v.chmod("/etc/shadow", 0o600).unwrap();
         v.write_file("/etc/sudoers", b"# MavexOS sudoers (no password prompts: ttys cannot block yet)\nroot ALL=(ALL) ALL\n%sudo ALL=(ALL) NOPASSWD: ALL\n").unwrap();
         v.chmod("/etc/sudoers", 0o440).unwrap();
-        v.write_file("/etc/profile", b"# /etc/profile: system-wide login settings\nexport PATH=\"${PATH:-/bin:/usr/bin}\"\nalias ls='ls --color=auto'\nalias ll='ls -l --color=auto'\nalias la='ls -A --color=auto'\nalias l='ls -CF --color=auto'\nalias grep='rg --no-heading --color=auto'\n").unwrap();
+        v.write_file("/etc/profile", b"# /etc/profile: system-wide login settings\nexport PATH=\"${PATH:-/bin:/usr/bin}\"\nalias ls='ls --color=auto'\nalias ll='ls -l --color=auto'\nalias la='ls -A --color=auto'\nalias l='ls -CF --color=auto'\nalias grep='rg --no-heading --color=auto'\nexport EDITOR=edit PAGER=less\n").unwrap();
         let _ = v.symlink("/proc/mounts", "/etc/mtab");
         s.hostinfo.boot_ns = s.hostinfo.now_ns;
         s.hostinfo.version = ver.to_string();

@@ -14,14 +14,14 @@ unsafe extern "C" {
     fn poll_oneoff(inp: *const u8, out: *mut u8, nsubs: usize, nevents: *mut usize) -> u16;
 }
 
-fn size() -> (usize, usize) {
+pub fn size() -> (usize, usize) {
     let mut o = [0u32; 2];
     unsafe { tty_size(o.as_mut_ptr()) };
     (o[0].max(20) as usize, o[1].max(5) as usize)
 }
 
 /// Waits until stdin is readable or `ms` passes; true when input is ready.
-fn wait_stdin(ms: u64) -> bool {
+pub fn wait_stdin(ms: u64) -> bool {
     let mut subs = [0u8; 96];
     subs[8] = 1; // fd_read on fd 0
     subs[48 + 8] = 0; // clock
@@ -352,7 +352,7 @@ impl App {
     }
 }
 
-fn split_keys(buf: &[u8]) -> Vec<Vec<u8>> {
+pub fn split_keys(buf: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < buf.len() {

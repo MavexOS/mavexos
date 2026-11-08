@@ -3,6 +3,8 @@
 //! of an iproute2-compatible subset over the kernel's virtual netns (netlink-like requests).
 mod ip;
 mod proc;
+mod pager;
+mod editor;
 mod stty;
 mod sysutils;
 mod top;
@@ -446,6 +448,9 @@ fn main() {
         "free" => sysutils::free(&args),
         "nproc" => sysutils::nproc(),
         "which" => sysutils::which(&args),
+        "less" | "more" => pager::less(&args),
+        "man" => pager::man(&args),
+        "edit" => editor::edit(&args),
         "ps" => proc::ps(&args),
         "pgrep" => proc::pgrep(&args),
         "pkill" => proc::pkill(&args),
