@@ -17,6 +17,8 @@ build() { # name repo ref binname [patch]
   cp "$dir/target/wasm32-wasip1/release/$bin.wasm" ".scratch/ext/$name.wasm"
 }
 build rg BurntSushi/ripgrep 14.1.1 rg ripgrep-wasi.patch
+build sed uutils/sed 5e2821e69da7eb08304e17807bd89188dc868a22 sed
+build diffutils uutils/diffutils 919194279e5a27236e71dcf67d18c88558176c51 diffutils
 build crabfetch LivacoNew/CrabFetch 187b0b2fc6bc6c8460deb8c7bfb240bd87ae3b60 crab-fetch crabfetch-wasi.patch
 # mavex-init lives in its own repo; MAVEX_INIT_DIR overrides with a local checkout
 if [ -n "$MAVEX_INIT_DIR" ]; then
