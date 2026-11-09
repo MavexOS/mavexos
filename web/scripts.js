@@ -22,6 +22,57 @@ const sys = {
   complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
 };
 
+/* ---------- persistence (IndexedDB) ---------- */
+const PERSIST = {
+  db: null, known: new Map(), lastHash: -1, saving: false,
+  open() { return new Promise((res) => { try { const rq = indexedDB.open("mavexos", 1); rq.onupgradeneeded = () => rq.result.createObjectStore("fs"); rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); rq.onblocked = () => res(null); } catch (e) { res(null); } }); },
+  tx(mode, f) { return new Promise((res, rej) => { const t = this.db.transaction("fs", mode); const r = f(t.objectStore("fs")); t.oncomplete = () => res(r && r.result); t.onerror = t.onabort = () => rej(t.error); }); },
+  split(blob) {
+    const out = []; const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength); let o = 0;
+    while (o + 21 <= blob.length) {
+      const st = o; const pl = dv.getUint32(o + 21, true); const path = dec.decode(blob.subarray(o + 25, o + 25 + pl));
+      const dl = dv.getUint32(o + 25 + pl, true); o += 29 + pl + dl;
+      out.push({ path, bytes: blob.slice(st, o), fp: Array.from(blob.subarray(st, st + 21)).join(",") + ":" + path + ":" + dl });
+    }
+    return out;
+  },
+  async init() {
+    this.db = await this.open();
+    if (!this.db) return -1;
+    if (location.hash.includes("reset")) await this.tx("readwrite", (s) => s.clear());
+    const rows = await this.tx("readonly", (s) => s.getAll());
+    let count = 0;
+    if (rows && rows.length) {
+      const total = rows.reduce((a, b) => a + b.length, 0); const blob = new Uint8Array(total); let o = 0;
+      for (const r of rows) { blob.set(r, o); o += r.length; }
+      const [p, n] = put(blob); try { count = K.k_persist_restore(p, n); } finally { K.k_free(p, n); }
+      for (const e of this.split(blob)) this.known.set(e.path, e.fp);
+    }
+    this.lastHash = K.k_persist_hash();
+    setInterval(() => this.save(), 2000);
+    addEventListener("pagehide", () => this.save(true));
+    return count;
+  },
+  async save(force) {
+    if (!this.db || this.saving) return;
+    const h = K.k_persist_hash();
+    if (h === this.lastHash && !force) return;
+    this.saving = true;
+    try {
+      const n = K.k_persist_dump(); const blob = new Uint8Array(K.memory.buffer, K.k_result_ptr(), n).slice();
+      const cur = this.split(blob); const seen = new Set();
+      const put_ = [], del = [];
+      for (const e of cur) { seen.add(e.path); if (this.known.get(e.path) !== e.fp) put_.push(e); }
+      for (const k of this.known.keys()) if (!seen.has(k)) del.push(k);
+      if (put_.length || del.length) await this.tx("readwrite", (s) => { for (const e of put_) s.put(e.bytes, e.path); for (const k of del) s.delete(k); });
+      for (const e of put_) this.known.set(e.path, e.fp);
+      for (const k of del) this.known.delete(k);
+      this.lastHash = h;
+    } catch (e) { console.warn("persist save failed", e); }
+    this.saving = false;
+  },
+};
+
 const write = (s) => tabs.cur.write(s);
 function makeTab(tt, els) {
 const { screenEl, out, lineEl, promptEl, beforeEl, curEl, afterEl, altEl } = els;
@@ -437,6 +488,8 @@ async function boot() {
   if (!FAST) await sleep(350);
   await coreutils; await brushMod; await mxu; await rgMod; await cfMod; await initMod;
   K.kmain();
+  const restored = await PERSIST.init();
+  write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ ok ] storage: restored ${restored} entries from IndexedDB\n` : "[ ok ] storage: IndexedDB mounted (first boot on this device)\n");
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   await publishSysfs();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);

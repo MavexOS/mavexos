@@ -360,6 +360,16 @@ impl Vfs {
         Ok(())
     }
 
+    pub fn set_meta(&mut self, path: &str, mode: u32, uid: u32, gid: u32, mtime: u64) -> Result<()> {
+        let ino = self.walk(path, false, 0)?;
+        let n = self.node_mut(ino);
+        n.mode = mode & 0o7777;
+        n.uid = uid;
+        n.gid = gid;
+        n.mtime = mtime;
+        Ok(())
+    }
+
     pub fn chmod(&mut self, path: &str, mode: u32) -> Result<()> {
         let ino = self.walk(path, true, 0)?;
         if self.cred.0 != 0 && self.cred.0 != self.node(ino).uid {

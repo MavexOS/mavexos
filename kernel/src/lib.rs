@@ -661,12 +661,139 @@ pub extern "C" fn k_tty_resize(cols: u32) {
     SHELL.with(|s| s.borrow_mut().cols = cols.clamp(20, 500));
 }
 
+fn boot_files(v: &mut Vfs) {
+    let ver = env!("CARGO_PKG_VERSION");
+    v.write_file("/etc/os-release", format!("NAME=\"MavexOS\"\nPRETTY_NAME=\"MavexOS\"\nVERSION=\"{0}\"\nVERSION_ID=\"{0}\"\nID=mavexos\nHOME_URL=\"https://github.com/MavexOS\"\n", ver).as_bytes()).unwrap();
+    v.write_file("/etc/profile", b"# /etc/profile: system-wide login settings (rewritten at every boot; put your own in ~/.bashrc)\nexport PATH=\"${PATH:-/bin:/usr/bin}\"\nalias ls='ls --color=auto'\nalias ll='ls -l --color=auto'\nalias la='ls -A --color=auto'\nalias l='ls -CF --color=auto'\nalias grep='rg --no-heading --color=auto'\nexport EDITOR=edit PAGER=less\n").unwrap();
+}
+
+const PERSIST_ROOTS: [&str; 7] = ["/etc", "/home", "/root", "/var", "/usr/local", "/opt", "/srv"];
+const PERSIST_SKIP: [&str; 4] = ["/etc/os-release", "/etc/profile", "/etc/mtab", "/var/run"];
+
+fn fnv(h: &mut u64, b: &[u8]) {
+    for &x in b {
+        *h = (*h ^ x as u64).wrapping_mul(0x100000001b3);
+    }
+}
+
+fn persist_walk(v: &Vfs, path: &str, out: &mut Vec<(String, mavex_vfs::Stat)>) {
+    if PERSIST_SKIP.contains(&path) {
+        return;
+    }
+    let Ok(st) = v.lstat(path) else { return };
+    out.push((path.to_string(), st));
+    if st.kind == Kind::Dir {
+        if let Ok(names) = v.readdir(path) {
+            for n in names {
+                persist_walk(v, &format!("{}/{}", path.trim_end_matches('/'), n), out);
+            }
+        }
+    }
+}
+
+fn persist_entries(v: &Vfs) -> Vec<(String, mavex_vfs::Stat)> {
+    let mut out = Vec::new();
+    for r in PERSIST_ROOTS {
+        persist_walk(v, r, &mut out);
+    }
+    out
+}
+
+/// Cheap fingerprint of every persisted node; JS polls this to know when to save.
+#[no_mangle]
+pub extern "C" fn k_persist_hash() -> f64 {
+    with_sys(|s| {
+        let mut h = 0xcbf29ce484222325u64;
+        for (p, st) in persist_entries(&s.vfs) {
+            fnv(&mut h, p.as_bytes());
+            fnv(&mut h, &st.mode.to_le_bytes());
+            fnv(&mut h, &st.uid.to_le_bytes());
+            fnv(&mut h, &st.gid.to_le_bytes());
+            fnv(&mut h, &st.mtime.to_le_bytes());
+            fnv(&mut h, &st.size.to_le_bytes());
+        }
+        (h & ((1u64 << 52) - 1)) as f64
+    })
+}
+
+/// Entries: kind u8, mode u32, uid u32, gid u32, mtime u64, pathlen u32, path, datalen u32, data.
+#[no_mangle]
+pub extern "C" fn k_persist_dump() -> i32 {
+    let blob = with_sys(|s| {
+        let mut b = Vec::new();
+        for (p, st) in persist_entries(&s.vfs) {
+            let data = match st.kind {
+                Kind::File => s.vfs.read_file(&p).unwrap_or_default(),
+                Kind::Symlink => s.vfs.readlink(&p).unwrap_or_default().into_bytes(),
+                Kind::Dir => Vec::new(),
+            };
+            b.push(match st.kind { Kind::File => 0u8, Kind::Dir => 1, Kind::Symlink => 2 });
+            b.extend_from_slice(&st.mode.to_le_bytes());
+            b.extend_from_slice(&st.uid.to_le_bytes());
+            b.extend_from_slice(&st.gid.to_le_bytes());
+            b.extend_from_slice(&st.mtime.to_le_bytes());
+            b.extend_from_slice(&(p.len() as u32).to_le_bytes());
+            b.extend_from_slice(p.as_bytes());
+            b.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            b.extend_from_slice(&data);
+        }
+        b
+    });
+    stage(blob)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_persist_restore(p: *const u8, n: usize) -> i32 {
+    let b = std::slice::from_raw_parts(p, n);
+    let rd = |o: &mut usize, k: usize| -> Option<&[u8]> {
+        let s = b.get(*o..*o + k)?;
+        *o += k;
+        Some(s)
+    };
+    with_sys(|s| {
+        let v = &mut s.vfs;
+        let (mut o, mut count) = (0usize, 0);
+        loop {
+            let Some(head) = rd(&mut o, 21) else { break };
+            let kind = head[0];
+            let u32at = |i: usize| u32::from_le_bytes(head[i..i + 4].try_into().unwrap());
+            let (mode, uid, gid) = (u32at(1), u32at(5), u32at(9));
+            let mtime = u64::from_le_bytes(head[13..21].try_into().unwrap());
+            let Some(pl) = rd(&mut o, 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()) as usize) else { break };
+            let Some(path) = rd(&mut o, pl).and_then(|x| std::str::from_utf8(x).ok()).map(String::from) else { break };
+            let Some(dl) = rd(&mut o, 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()) as usize) else { break };
+            let Some(data) = rd(&mut o, dl) else { break };
+            if PERSIST_SKIP.contains(&path.as_str()) || !PERSIST_ROOTS.iter().any(|r| path == *r || path.starts_with(&format!("{}/", r))) {
+                continue;
+            }
+            let mut parent = String::new();
+            let comps: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+            for c in &comps[..comps.len().saturating_sub(1)] {
+                parent.push('/');
+                parent.push_str(c);
+                let _ = v.mkdir(&parent, 0o755);
+            }
+            let _ = v.unlink(&path);
+            let ok = match kind {
+                0 => v.write_file(&path, data).is_ok(),
+                1 => v.mkdir(&path, 0o755).is_ok() || v.lstat(&path).is_ok(),
+                _ => v.symlink(std::str::from_utf8(data).unwrap_or(""), &path).is_ok(),
+            };
+            if ok {
+                let _ = v.set_meta(&path, mode, uid, gid, mtime);
+                count += 1;
+            }
+        }
+        boot_files(v);
+        count
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn kmain() {
     let ver = env!("CARGO_PKG_VERSION");
     print(&format!("MavexOS {} (wasm32) - kernel starting\n", ver));
-    print("[ ok ] first boot on this device: no saved state found\n");
-    print("[ ok ] memory: wasm linear memory, RAM-only (nothing persists yet)\n");
+    print("[ ok ] memory: wasm linear memory\n");
     with_sys(|s| {
         let v = &mut s.vfs;
         for d in ["/bin", "/dev", "/etc", "/home", "/home/user", "/tmp", "/usr"] {
@@ -675,7 +802,7 @@ pub extern "C" fn kmain() {
         v.chmod("/tmp", 0o1777).unwrap();
         for f in ["/dev/null", "/dev/tty"] { v.write_file(f, b"").unwrap(); v.chmod(f, 0o666).unwrap(); }
         v.write_file("/etc/hostname", b"mavex\n").unwrap();
-        v.write_file("/etc/os-release", format!("NAME=\"MavexOS\"\nPRETTY_NAME=\"MavexOS\"\nVERSION=\"{0}\"\nVERSION_ID=\"{0}\"\nID=mavexos\nHOME_URL=\"https://github.com/MavexOS\"\n", ver).as_bytes()).unwrap();
+        boot_files(v);
         v.write_file("/etc/motd", b"Welcome to MavexOS. Type 'help' for commands.\n").unwrap();
         v.chown("/home/user", 1000, 1000).unwrap();
         v.mkdir("/root", 0o700).unwrap();
@@ -685,7 +812,6 @@ pub extern "C" fn kmain() {
         v.chmod("/etc/shadow", 0o600).unwrap();
         v.write_file("/etc/sudoers", b"# MavexOS sudoers (no password prompts: ttys cannot block yet)\nroot ALL=(ALL) ALL\n%sudo ALL=(ALL) NOPASSWD: ALL\n").unwrap();
         v.chmod("/etc/sudoers", 0o440).unwrap();
-        v.write_file("/etc/profile", b"# /etc/profile: system-wide login settings\nexport PATH=\"${PATH:-/bin:/usr/bin}\"\nalias ls='ls --color=auto'\nalias ll='ls -l --color=auto'\nalias la='ls -A --color=auto'\nalias l='ls -CF --color=auto'\nalias grep='rg --no-heading --color=auto'\nexport EDITOR=edit PAGER=less\n").unwrap();
         let _ = v.symlink("/proc/mounts", "/etc/mtab");
         s.hostinfo.boot_ns = s.hostinfo.now_ns;
         s.hostinfo.version = ver.to_string();

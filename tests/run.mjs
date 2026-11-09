@@ -280,7 +280,7 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.21\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.22\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
@@ -291,5 +291,44 @@ async function runBrush(name, type) {
   await b.close();
 }
 
-for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) { await run(name, type); await runBrush(name, type); }
+async function runPersist(name, type) {
+  const b = await type.launch();
+  const p = await b.newPage();
+  const errs = [];
+  p.on("pageerror", (e) => errs.push(e.message));
+  const fails = [];
+  const boot = async () => { await p.goto(base + "#fast"); await p.waitForFunction(() => window.mavexReady, null, { timeout: 10000 }); };
+  const ty = async (l) => { await p.keyboard.type(l); await p.keyboard.press("Enter"); };
+  const w = (ms) => new Promise((r) => setTimeout(r, ms));
+  await boot();
+  await ty("echo keepme > ~/keep.txt && mkdir -p ~/d/e && chmod 600 ~/keep.txt && ln -s keep.txt ~/lnk && echo hi > /tmp/gone");
+  await ty("printf 'bin\\x00\\xff\\x01' > ~/bin.dat");
+  await w(3500);
+  await p.reload();
+  await p.waitForFunction(() => window.mavexReady, null, { timeout: 10000 });
+  await ty("cat ~/keep.txt; stat ~/keep.txt | grep Access; ls -d ~/d/e; readlink ~/lnk; wc -c < ~/bin.dat; cat /tmp/gone; ls /etc/passwd");
+  await w(800);
+  let t = await text(p);
+  if (!t.includes("restored")) fails.push("restore message");
+  if (!t.includes("keepme")) fails.push("file persisted");
+  if (!t.includes("(0600/")) fails.push("mode persisted");
+  if (!t.includes("/home/user/d/e")) fails.push("dir persisted");
+  if (!t.includes("keep.txt\n")) fails.push("symlink persisted");
+  if (!/\n6\n/.test(t)) fails.push("binary persisted");
+  if (!t.includes("cat: /tmp/gone")) fails.push("tmp not persisted");
+  await ty("rm ~/keep.txt");
+  await w(3500);
+  await p.reload();
+  await p.waitForFunction(() => window.mavexReady, null, { timeout: 10000 });
+  await ty("cat ~/keep.txt");
+  await w(500);
+  t = await text(p);
+  if (!t.includes("cat: /home/user/keep.txt")) fails.push("delete persisted");
+  if (errs.length) fails.push("pageerror: " + errs.join("; "));
+  console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (persist)`, fails.length ? fails : "");
+  if (fails.length) { failed = true; console.log(t.slice(-2000)); }
+  await b.close();
+}
+
+for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) { await run(name, type); await runBrush(name, type); await runPersist(name, type); }
 process.exit(failed ? 1 : 0);
