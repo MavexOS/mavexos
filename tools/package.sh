@@ -2,7 +2,7 @@
 set -e
 cd "$(dirname "$0")/.."
 sh tools/build.sh
-VER=$(sed -n 's/^version = "\(.*\)"/\1/p' kernel/Cargo.toml | head -1)
+VER=$(sed -n 's/^version = "\(.*\)"/\1/p' "${MAVEX_KERNEL_DIR:-.scratch/ext/kernel-src}/kernel/Cargo.toml" | head -1)
 NAME="mavexos-$VER"
 rm -rf "dist/$NAME" "dist/$NAME.zip"
 mkdir -p "dist/$NAME"

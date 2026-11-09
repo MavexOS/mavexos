@@ -14,14 +14,14 @@ Produces `dist/index.html` (wasm inlined as base64 so it works from `file://`). 
 
 ## Layout
 
-- `kernel/`: Rust wasm kernel
-- `shell/`: `msh` shell (native unit tests)
-- `web/`: JS shell template
-- `vfs/`: POSIX-like in-memory filesystem (native unit tests)
+- `web/`: JS shell (terminal, persistence, boot)
+- `apps/`: userland built for wasm32-wasip1 (brush, coreutils, mavexutils)
+- Kernel: [MavexOS/mavex-kernel](https://github.com/MavexOS/mavex-kernel) (kernel, vfs, sys, shell crates + `wasi.js` host), pulled by `tools/ext.sh`; init: [MavexOS/mavex-init](https://github.com/MavexOS/mavex-init)
 - `tests/`: Playwright browser tests (Chromium + Firefox)
 - `tools/`: build scripts
 
 ## Test
 
-    cargo test --workspace
+    (cd apps && cargo test)   # kernel unit tests: cargo test in mavex-kernel
+    # local kernel/init checkouts: MAVEX_KERNEL_DIR=... MAVEX_INIT_DIR=...
     tools/build.sh && cd tests && npm install && npx playwright install chromium firefox && npm test

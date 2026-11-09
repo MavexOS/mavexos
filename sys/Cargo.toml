@@ -1,8 +1,0 @@
-[package]
-name = "mavex-sys"
-version = "0.0.23"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-
-[dependencies]
-mavex-vfs = { path = "../vfs" }

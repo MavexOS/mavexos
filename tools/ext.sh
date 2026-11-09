@@ -25,3 +25,16 @@ if [ -n "$MAVEX_INIT_DIR" ]; then
 else
   build init MavexOS/mavex-init c23710369cc36956ef55cafa6f2629aa85fbf6ae mavex-init
 fi
+# mavex-kernel lives in its own repo; MAVEX_KERNEL_DIR overrides with a local checkout
+if [ -n "$MAVEX_KERNEL_DIR" ]; then
+  kdir=$MAVEX_KERNEL_DIR
+else
+  kdir=.scratch/ext/kernel-src
+  if [ ! -d "$kdir" ]; then
+    git clone -q https://github.com/MavexOS/mavex-kernel "$kdir"
+    git -C "$kdir" checkout -q 5c028bd4d643fdb641092b5bd5107ddf4d85dbb4
+  fi
+fi
+(cd "$kdir" && cargo build --release --target wasm32-unknown-unknown -p mavex-kernel 2>&1 | tail -1)
+cp "$kdir/target/wasm32-unknown-unknown/release/mavex_kernel.wasm" .scratch/ext/kernel.wasm
+cp "$kdir/host/wasi.js" .scratch/ext/wasi.js
