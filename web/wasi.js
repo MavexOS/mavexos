@@ -382,6 +382,20 @@
         if (r > 0 && !task.sync) startProcess(r, task.daemon);
         return r;
       },
+      spawn_as(pp, pn, ap, an, ep, en, cp, cn, s0, s1, s2, uid, gid) {
+        const cr = K.x.k_proc_creds(pid);
+        if (cr < 0 || new Uint32Array(staged(cr).buffer.slice(0, 16))[2] !== 0) return -63;
+        const [[a, al], [b, bl], [c, cl], [d, dl]] = packed(str(pp, pn), m8().slice(ap, ap + an), m8().slice(ep, ep + en), str(cp, cn));
+        const r = K.x.k_spawn(pid, a, al, b, bl, c, cl, d, dl, s0, s1, s2);
+        if (r > 0) { K.x.k_force_creds(r, uid, gid); if (!task.sync) startProcess(r, task.daemon); }
+        return r;
+      },
+      power(kind) {
+        const cr = K.x.k_proc_creds(pid);
+        if (cr < 0 || new Uint32Array(staged(cr).buffer.slice(0, 16))[2] !== 0) return -63;
+        if (globalThis.mavexPower) globalThis.mavexPower(kind);
+        return 0;
+      },
       ready: () => 1,
       run: (c) => { if (task.sync) runProcess(c); return 0; },
       wait(c) {

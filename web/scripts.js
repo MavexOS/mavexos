@@ -73,6 +73,17 @@ const PERSIST = {
   },
 };
 
+globalThis.mavexPower = async (kind) => {
+  try { await PERSIST.save(true); } catch (e) {}
+  if (kind === 1) { location.hash = location.hash.replace(/,?reset/, ""); location.reload(); return; }
+  const o = document.createElement("div");
+  o.style.cssText = "position:fixed;inset:0;background:#000;color:#aaa;display:flex;align-items:center;justify-content:center;font:16px monospace;z-index:99;cursor:pointer;white-space:pre;text-align:center";
+  o.textContent = (kind === 2 ? "System halted." : "Powered off.") + "\n\nClick or press any key to boot again.";
+  document.body.appendChild(o);
+  const again = () => { location.hash = location.hash.replace(/,?reset/, ""); location.reload(); };
+  o.addEventListener("click", again); addEventListener("keydown", again, { once: true });
+};
+
 const write = (s) => tabs.cur.write(s);
 function makeTab(tt, els) {
 const { screenEl, out, lineEl, promptEl, beforeEl, curEl, afterEl, altEl } = els;
@@ -497,7 +508,7 @@ async function boot() {
   R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit"]);
   R.install("rg", []);
   R.install("crabfetch", []);
-  R.install("init", ["systemctl", "journalctl"]);
+  R.install("init", ["systemctl", "journalctl", "reboot", "poweroff", "halt", "shutdown"]);
   R.installSetuid("mavexutils", ["sudo", "su", "passwd"]);
   R.startInit();
   for (let i = 0; i < 60 && typeof sys.readFile("/run/mavex-init/booted") !== "string"; i++) await sleep(50);

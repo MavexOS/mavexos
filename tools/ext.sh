@@ -23,5 +23,5 @@ if [ -n "$MAVEX_INIT_DIR" ]; then
   (cd "$MAVEX_INIT_DIR" && cargo build --release --target wasm32-wasip1 2>&1 | tail -1)
   cp "$MAVEX_INIT_DIR/target/wasm32-wasip1/release/mavex-init.wasm" .scratch/ext/init.wasm
 else
-  build init MavexOS/mavex-init 0f91cb82369a99fa02ef4065ca44ff67b1a5997c mavex-init
+  build init MavexOS/mavex-init c23710369cc36956ef55cafa6f2629aa85fbf6ae mavex-init
 fi

@@ -280,7 +280,7 @@ async function runBrush(name, type) {
   if (!/typed-input-line\ntyped-input-line\n/.test(t)) fails.push("cat reads tty");
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.22\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.23\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
@@ -330,5 +330,40 @@ async function runPersist(name, type) {
   await b.close();
 }
 
-for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) { await run(name, type); await runBrush(name, type); await runPersist(name, type); }
+async function runInit(name, type) {
+  const b = await type.launch();
+  const p = await b.newPage();
+  const errs = [];
+  p.on("pageerror", (e) => errs.push(e.message));
+  const fails = [];
+  const ty = async (l) => { await p.keyboard.type(l); await p.keyboard.press("Enter"); };
+  const w = (ms) => new Promise((r) => setTimeout(r, ms));
+  await p.goto(base + "#fast");
+  await p.waitForFunction(() => window.mavexReady, null, { timeout: 10000 });
+  await ty("printf '[Service]\\nType=oneshot\\nUser=user\\nExecStart=/bin/brush -c \"id -un > /tmp/svcuser\"\\n' | sudo tee /etc/systemd/system/whoami.service > /dev/null");
+  await ty("sudo systemctl start whoami; sleep 1; cat /tmp/svcuser; rm /tmp/svcuser");
+  await w(3000);
+  await ty("printf '[Timer]\\nOnActiveSec=1s\\nUnit=whoami.service\\n' | sudo tee /etc/systemd/system/t1.timer > /dev/null; sudo systemctl start t1.timer; sleep 3; sudo systemctl list-timers; echo TIMER; cat /tmp/svcuser");
+  await w(6000);
+  await ty("echo rebooted > ~/rb; reboot");
+  await w(1500);
+  const pre = await text(p);
+  await ty("sudo reboot");
+  await w(6000);
+  await p.waitForFunction(() => window.mavexReady, null, { timeout: 10000 });
+  await ty("cat ~/rb");
+  await w(800);
+  const t = pre + (await text(p));
+  if (!t.includes("\nuser\n")) fails.push("User= service ran as user");
+  if (!t.includes("t1.timer") || !t.includes("whoami.service")) fails.push("list-timers");
+  if (!/TIMER\nuser\n/.test(t)) fails.push("timer triggered service");
+  if (!t.includes("Access denied")) fails.push("reboot denied for non-root");
+  if (!/\nrebooted\n/.test(t)) fails.push("reboot kept ~ after reload");
+  if (errs.length) fails.push("pageerror: " + errs.join("; "));
+  console.log(`${fails.length ? "FAIL" : "PASS"} ${name} (init)`, fails.length ? fails : "");
+  if (fails.length) { failed = true; console.log(t.slice(-2500)); }
+  await b.close();
+}
+
+for (const [name, type] of [["chromium", chromium], ["firefox", firefox]]) { await run(name, type); await runBrush(name, type); await runPersist(name, type); await runInit(name, type); }
 process.exit(failed ? 1 : 0);
