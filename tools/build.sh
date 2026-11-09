@@ -16,6 +16,9 @@ afy apps/target/wasm32-wasip1/release/brush.wasm
 afy apps/target/wasm32-wasip1/release/mavexutils.wasm
 afy .scratch/ext/rg.wasm
 afy .scratch/ext/sed.wasm
+afy .scratch/ext/find.wasm
+afy .scratch/ext/xargs.wasm
+afy .scratch/ext/tar.wasm
 afy .scratch/ext/diffutils.wasm
 afy .scratch/ext/init.wasm
 cp web/index.html web/styles.css web/scripts.js web/vt.js .scratch/ext/wasi.js dist/
@@ -31,6 +34,8 @@ open("dist/brush.wasm.js", "w").write(blob(".scratch/async/brush.wasm", "MAVEX_B
 open("dist/ext-rg.wasm.js", "w").write(blob(".scratch/async/rg.wasm", "MAVEX_EXT_RG_B64"))
 open("dist/ext-sed.wasm.js", "w").write(blob(".scratch/async/sed.wasm", "MAVEX_EXT_SED_B64"))
 open("dist/ext-diffutils.wasm.js", "w").write(blob(".scratch/async/diffutils.wasm", "MAVEX_EXT_DIFFUTILS_B64"))
+for n in ("find", "xargs", "tar"):
+    open(f"dist/ext-{n}.wasm.js", "w").write(blob(f".scratch/async/{n}.wasm", f"MAVEX_EXT_{n.upper()}_B64"))
 open("dist/ext-crabfetch.wasm.js", "w").write(blob(".scratch/ext/crabfetch.wasm", "MAVEX_EXT_CRABFETCH_B64"))
 open("dist/ext-init.wasm.js", "w").write(blob(".scratch/async/init.wasm", "MAVEX_EXT_INIT_B64"))
 open("dist/mavexutils.wasm.js", "w").write(blob(".scratch/async/mavexutils.wasm", "MAVEX_MAVEXUTILS_B64"))

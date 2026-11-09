@@ -1,0 +1,15 @@
+diff --git a/src/main.rs b/src/main.rs
+index 2be2809..7556d92 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -56,6 +56,10 @@ fn second_arg_error(name: &OsStr) -> ! {
+ }
+ 
+ fn main() -> ExitCode {
++    #[cfg(target_os = "wasi")]
++    if let Ok(pwd) = std::env::var("PWD") {
++        let _ = std::env::set_current_dir(pwd);
++    }
+     let mut args = std::env::args_os().peekable();
+ 
+     let exe_path = binary_path(&mut args);

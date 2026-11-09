@@ -1,0 +1,120 @@
+diff -ruN a/src/builder.rs b/src/builder.rs
+--- a/src/builder.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/builder.rs	2026-11-09 13:20:17.917996210 -0500
+@@ -688,6 +688,8 @@
+     name: Option<&Path>,
+     options: BuilderOptions,
+ ) -> io::Result<()> {
++    #[cfg(target_arch = "wasm32")]
++    crate::mavex::set_cur(path);
+     let stat = if options.follow {
+         fs::metadata(path).map_err(|err| {
+             io::Error::new(
+@@ -822,6 +824,8 @@
+     src_path: &Path,
+     options: BuilderOptions,
+ ) -> io::Result<()> {
++    #[cfg(target_arch = "wasm32")]
++    crate::mavex::set_cur(src_path);
+     let stat = fs::metadata(src_path)?;
+     append_fs(
+         dst,
+diff -ruN a/src/entry.rs b/src/entry.rs
+--- a/src/entry.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/entry.rs	2026-11-09 13:20:17.918389132 -0500
+@@ -854,7 +854,8 @@
+             mask: u32,
+             _preserve: bool,
+         ) -> io::Result<()> {
+-            Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
++let mode = if _preserve { mode } else { mode & 0o777 } & !mask;
++            crate::mavex::chmod_path(dst, mode)
+         }
+ 
+         #[cfg(all(unix, not(target_arch = "wasm32"), feature = "xattr"))]
+diff -ruN a/src/header.rs b/src/header.rs
+--- a/src/header.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/header.rs	2026-11-09 13:25:08.260294347 -0500
+@@ -782,7 +782,32 @@
+     #[cfg(target_arch = "wasm32")]
+     #[allow(unused_variables)]
+     fn fill_platform_from(&mut self, meta: &fs::Metadata, mode: HeaderMode) {
+-        unimplemented!();
++        let _ = mode;
++        let mtime = meta
++            .modified()
++            .ok()
++            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
++            .map(|d| d.as_secs())
++            .unwrap_or(0);
++        self.set_mtime(mtime);
++        self.set_uid(0);
++        self.set_gid(0);
++        let ft = meta.file_type();
++        self.set_entry_type(if ft.is_dir() {
++            EntryType::Directory
++        } else if ft.is_symlink() {
++            EntryType::Symlink
++        } else {
++            EntryType::Regular
++        });
++        match crate::mavex::stat_cur() {
++            Some((m, u, g)) => {
++                self.set_mode(m & 0o7777);
++                self.set_uid(u as u64);
++                self.set_gid(g as u64);
++            }
++            None => self.set_mode(if meta.is_dir() { 0o755 } else { 0o644 }),
++        }
+     }
+ 
+     #[cfg(all(unix, not(target_arch = "wasm32")))]
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/lib.rs	2026-11-09 13:20:17.916253602 -0500
+@@ -51,6 +51,8 @@
+ pub use crate::header::{GnuHeader, GnuSparseHeader, Header, HeaderMode, OldHeader, UstarHeader};
+ pub use crate::pax::{PaxExtension, PaxExtensions};
+ 
++#[cfg(target_arch = "wasm32")]
++mod mavex;
+ mod archive;
+ mod builder;
+ mod entry;
+diff -ruN a/src/mavex.rs b/src/mavex.rs
+--- a/src/mavex.rs	1969-12-31 19:00:00.000000000 -0500
++++ b/src/mavex.rs	2026-11-09 13:20:17.898705449 -0500
+@@ -0,0 +1,33 @@
++//! MavexOS: real modes/owners through host imports (wasip1 std exposes none).
++use std::cell::RefCell;
++use std::path::{Path, PathBuf};
++
++#[link(wasm_import_module = "mavex")]
++unsafe extern "C" {
++    fn statx(p: *const u8, n: usize, out: *mut u32) -> i32;
++    fn chmod(p: *const u8, n: usize, mode: u32) -> i32;
++}
++
++thread_local!(static CUR: RefCell<Option<PathBuf>> = const { RefCell::new(None) });
++
++pub fn set_cur(p: &Path) {
++    CUR.with(|c| *c.borrow_mut() = Some(p.to_path_buf()));
++}
++
++pub fn stat_cur() -> Option<(u32, u32, u32)> {
++    let p = CUR.with(|c| c.borrow().clone())?;
++    let s = p.to_str()?;
++    let mut o = [0u32; 6];
++    if unsafe { statx(s.as_ptr(), s.len(), o.as_mut_ptr()) } < 0 {
++        return None;
++    }
++    Some((o[0], o[1], o[2]))
++}
++
++pub fn chmod_path(p: &Path, mode: u32) -> std::io::Result<()> {
++    let s = p.to_str().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
++    if unsafe { chmod(s.as_ptr(), s.len(), mode) } < 0 {
++        return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
++    }
++    Ok(())
++}

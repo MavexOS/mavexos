@@ -1,0 +1,15 @@
+diff --git a/src/bin/sed.rs b/src/bin/sed.rs
+index 03dfafd..a7c8570 100644
+--- a/src/bin/sed.rs
++++ b/src/bin/sed.rs
+@@ -7,6 +7,10 @@ use std::ffi::OsString;
+ use std::process;
+ 
+ fn main() {
++    #[cfg(target_os = "wasi")]
++    if let Ok(pwd) = std::env::var("PWD") {
++        let _ = std::env::set_current_dir(pwd);
++    }
+     // Detect multicall vs single-call BEFORE any uucore calls
+     // This must happen first to set the utility name detection mode correctly
+     let raw_args: Vec<OsString> = std::env::args_os().collect();

@@ -1,0 +1,138 @@
+diff --git a/src/find/main.rs b/src/find/main.rs
+index b9e4eda..cc988ca 100644
+--- a/src/find/main.rs
++++ b/src/find/main.rs
+@@ -16,6 +16,10 @@ fn collect_utf8_args(args: impl Iterator<Item = OsString>) -> Result<Vec<String>
+ }
+ 
+ fn main() {
++    #[cfg(target_os = "wasi")]
++    if let Ok(pwd) = std::env::var("PWD") {
++        let _ = std::env::set_current_dir(pwd);
++    }
+     // Ignores the SIGPIPE signal.
+     // This is to solve the problem that when find is used with a pipe character,
+     // the downstream software of the standard output stream closes the pipe and triggers a panic.
+diff --git a/src/find/matchers/exec.rs b/src/find/matchers/exec.rs
+index f117004..2bdeb55 100644
+--- a/src/find/matchers/exec.rs
++++ b/src/find/matchers/exec.rs
+@@ -155,7 +155,7 @@ impl Matcher for SingleExecMatcher {
+                 }
+             }
+         }
+-        match command.status() {
++        match crate::mavex::status(&command) {
+             Ok(status) => status.success(),
+             Err(e) => {
+                 writeln!(
+diff --git a/src/lib.rs b/src/lib.rs
+index fa7d000..7eb9fc4 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5,6 +5,8 @@
+ // https://opensource.org/licenses/MIT.
+ 
+ pub mod find;
++#[cfg(target_os = "wasi")]
++pub mod mavex;
+ pub mod locate;
+ pub mod updatedb;
+ pub mod xargs;
+diff --git a/src/mavex.rs b/src/mavex.rs
+new file mode 100644
+index 0000000..fab624b
+--- /dev/null
++++ b/src/mavex.rs
+@@ -0,0 +1,63 @@
++//! MavexOS: process spawning through the host (wasip1 std cannot spawn).
++use std::io;
++use std::process::Command;
++
++#[link(wasm_import_module = "mavex")]
++unsafe extern "C" {
++    fn spawn(prog: *const u8, prog_n: usize, argv: *const u8, argv_n: usize, env: *const u8, env_n: usize, cwd: *const u8, cwd_n: usize, s0: i32, s1: i32, s2: i32) -> i32;
++    fn run(pid: u32) -> i32;
++    fn wait(pid: u32) -> i32;
++}
++
++pub struct Status(i32);
++
++impl Status {
++    pub fn success(&self) -> bool {
++        self.0 == 0
++    }
++    pub fn code(&self) -> Option<i32> {
++        Some(self.0)
++    }
++}
++
++pub fn chdir_to_pwd() {
++    if let Ok(pwd) = std::env::var("PWD") {
++        let _ = std::env::set_current_dir(pwd);
++    }
++}
++
++pub fn status(cmd: &Command) -> io::Result<Status> {
++    let prog = cmd.get_program().to_string_lossy().into_owned();
++    let mut env: Vec<(String, String)> = std::env::vars().collect();
++    for (k, v) in cmd.get_envs() {
++        let k = k.to_string_lossy().into_owned();
++        env.retain(|(ek, _)| *ek != k);
++        if let Some(v) = v {
++            env.push((k, v.to_string_lossy().into_owned()));
++        }
++    }
++    let j = |v: &[String]| {
++        let mut b = Vec::new();
++        for s in v {
++            b.extend_from_slice(s.as_bytes());
++            b.push(0);
++        }
++        b
++    };
++    let mut argv = vec![prog.clone()];
++    argv.extend(cmd.get_args().map(|a| a.to_string_lossy().into_owned()));
++    let envs: Vec<String> = env.into_iter().map(|(k, v)| format!("{k}={v}")).collect();
++    let cwd = match cmd.get_current_dir() {
++        Some(d) => d.to_string_lossy().into_owned(),
++        None => std::env::var("PWD").unwrap_or_else(|_| "/".into()),
++    };
++    let (a, e) = (j(&argv), j(&envs));
++    let pid = unsafe { spawn(prog.as_ptr(), prog.len(), a.as_ptr(), a.len(), e.as_ptr(), e.len(), cwd.as_ptr(), cwd.len(), 0, 1, 2) };
++    if pid < 0 {
++        return Err(io::Error::from(io::ErrorKind::NotFound));
++    }
++    unsafe {
++        run(pid as u32);
++        Ok(Status(wait(pid as u32)))
++    }
++}
+diff --git a/src/xargs/main.rs b/src/xargs/main.rs
+index 6ae4393..703cad1 100644
+--- a/src/xargs/main.rs
++++ b/src/xargs/main.rs
+@@ -5,6 +5,10 @@
+ // https://opensource.org/licenses/MIT.
+ 
+ fn main() {
++    #[cfg(target_os = "wasi")]
++    if let Ok(pwd) = std::env::var("PWD") {
++        let _ = std::env::set_current_dir(pwd);
++    }
+     // `std::env::args` panics on a non-UTF-8 argument, so read the arguments
+     // with `args_os` and report the first invalid one instead of aborting.
+     let args = match std::env::args_os()
+diff --git a/src/xargs/mod.rs b/src/xargs/mod.rs
+index 8347dd3..47e0655 100644
+--- a/src/xargs/mod.rs
++++ b/src/xargs/mod.rs
+@@ -503,7 +503,7 @@ impl CommandBuilder<'_> {
+         }
+ 
+         match &self.options.action {
+-            ExecAction::Command(_) => match command.status() {
++            ExecAction::Command(_) => match crate::mavex::status(&command) {
+                 Ok(status) => {
+                     if status.success() {
+                         Ok(CommandResult::Success)

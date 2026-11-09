@@ -495,11 +495,12 @@ async function boot() {
   const rgMod = R.registerModule("rg", window.MAVEX_EXT_RG_B64);
   const sedMod = R.registerModule("sed", window.MAVEX_EXT_SED_B64);
   const dfMod = R.registerModule("diffutils", window.MAVEX_EXT_DIFFUTILS_B64);
+  const exMods = ["find", "xargs", "tar"].map((n) => R.registerModule(n, window["MAVEX_EXT_" + n.toUpperCase() + "_B64"]));
   const cfMod = R.registerModule("crabfetch", window.MAVEX_EXT_CRABFETCH_B64);
   const initMod = R.registerModule("init", window.MAVEX_EXT_INIT_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
   if (!FAST) await sleep(350);
-  await coreutils; await brushMod; await mxu; await rgMod; await sedMod; await dfMod; await cfMod; await initMod;
+  await coreutils; await brushMod; await mxu; await rgMod; await sedMod; await Promise.all(exMods); await dfMod; await cfMod; await initMod;
   K.kmain();
   const restored = await PERSIST.init();
   write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ ok ] storage: restored ${restored} entries from IndexedDB\n` : "[ ok ] storage: IndexedDB mounted (first boot on this device)\n");
@@ -510,6 +511,9 @@ async function boot() {
   R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit"]);
   R.install("rg", []);
   R.install("sed", []);
+  R.install("find", []);
+  R.install("xargs", []);
+  R.install("tar", []);
   R.install("diffutils", ["diff", "cmp", "diff3", "sdiff"]);
   R.install("crabfetch", []);
   R.install("init", ["systemctl", "journalctl", "reboot", "poweroff", "halt", "shutdown"]);

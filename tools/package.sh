@@ -6,7 +6,7 @@ VER=$(sed -n 's/^version = "\(.*\)"/\1/p' "${MAVEX_KERNEL_DIR:-.scratch/ext/kern
 NAME="mavexos-$VER"
 rm -rf "dist/$NAME" "dist/$NAME.zip"
 mkdir -p "dist/$NAME"
-for f in index.html styles.css scripts.js wasi.js vt.js kernel.wasm.js coreutils.wasm.js brush.wasm.js mavexutils.wasm.js ext-rg.wasm.js ext-sed.wasm.js ext-diffutils.wasm.js ext-crabfetch.wasm.js ext-init.wasm.js; do cp "dist/$f" "dist/$NAME/$f"; done
+for f in index.html styles.css scripts.js wasi.js vt.js kernel.wasm.js coreutils.wasm.js brush.wasm.js mavexutils.wasm.js ext-rg.wasm.js ext-sed.wasm.js ext-find.wasm.js ext-xargs.wasm.js ext-tar.wasm.js ext-diffutils.wasm.js ext-crabfetch.wasm.js ext-init.wasm.js; do cp "dist/$f" "dist/$NAME/$f"; done
 cat > "dist/$NAME/README.txt" <<TXT
 MavexOS $VER (pre-release)
 
@@ -20,7 +20,7 @@ python3 - "dist" "$NAME" <<'PY'
 import sys, zipfile, os
 d, n = sys.argv[1:3]
 with zipfile.ZipFile(f"{d}/{n}.zip", "w", zipfile.ZIP_DEFLATED) as z:
-    for f in ("index.html", "styles.css", "scripts.js", "wasi.js", "vt.js", "kernel.wasm.js", "coreutils.wasm.js", "brush.wasm.js", "mavexutils.wasm.js", "ext-rg.wasm.js", "ext-sed.wasm.js", "ext-diffutils.wasm.js", "ext-crabfetch.wasm.js", "ext-init.wasm.js", "README.txt"):
+    for f in ("index.html", "styles.css", "scripts.js", "wasi.js", "vt.js", "kernel.wasm.js", "coreutils.wasm.js", "brush.wasm.js", "mavexutils.wasm.js", "ext-rg.wasm.js", "ext-sed.wasm.js", "ext-find.wasm.js", "ext-xargs.wasm.js", "ext-tar.wasm.js", "ext-diffutils.wasm.js", "ext-crabfetch.wasm.js", "ext-init.wasm.js", "README.txt"):
         z.write(f"{d}/{n}/{f}", f"{n}/{f}")
 PY
 echo "packaged dist/$NAME.zip"

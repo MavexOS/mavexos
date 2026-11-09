@@ -153,6 +153,10 @@ async function runBrush(name, type) {
   await new Promise((r) => setTimeout(r, 1200));
   await ty("diff /tmp/sa /tmp/sb");
   await new Promise((r) => setTimeout(r, 1500));
+  await ty("mkdir -p /tmp/tt/d; echo tarok > /tmp/tt/d/f; cd /tmp; tar czf tt.tgz tt; mkdir tx; cd tx; tar xzf ../tt.tgz; cd /tmp");
+  await new Promise((r) => setTimeout(r, 3500));
+  await ty("find tx -name f | xargs cat");
+  await new Promise((r) => setTimeout(r, 3500));
   await new Promise((r) => setTimeout(r, 1200));
   await ty("systemctl is-active mavex-heartbeat; systemctl stop mavex-heartbeat; systemctl is-active mavex-heartbeat; systemctl start mavex-heartbeat; systemctl is-active mavex-heartbeat; journalctl -u mavex-heartbeat --no-pager | tail -n 3; journalctl --no-pager | head -n 8; systemctl list-units | head -n 6; cat /proc/1/comm");
   await new Promise((r) => setTimeout(r, 4000));
@@ -288,8 +292,9 @@ async function runBrush(name, type) {
   if (!t.includes("^C") || !t.includes("\nafter-ctrl-c\n")) fails.push("ctrl-c");
   if (!t.includes("\nslow-a\n")) fails.push("pipeline with sleep");
   if (!t.includes("hello SEDOK")) fails.push("sed");
+  if (!t.includes("\ntarok\n")) fails.push("tar roundtrip + find | xargs");
   if (!t.includes("< hello world") || !t.includes("> hallo world")) fails.push("diff");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.23\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.24\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
