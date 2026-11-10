@@ -18,6 +18,7 @@ afy .scratch/ext/rg.wasm
 afy .scratch/ext/sed.wasm
 afy .scratch/ext/awk.wasm
 afy .scratch/ext/kibi.wasm
+afy .scratch/ext/mwget.wasm
 afy .scratch/ext/find.wasm
 afy .scratch/ext/xargs.wasm
 afy .scratch/ext/tar.wasm
@@ -36,7 +37,7 @@ open("dist/brush.wasm.js", "w").write(blob(".scratch/async/brush.wasm", "MAVEX_B
 open("dist/ext-rg.wasm.js", "w").write(blob(".scratch/async/rg.wasm", "MAVEX_EXT_RG_B64"))
 open("dist/ext-sed.wasm.js", "w").write(blob(".scratch/async/sed.wasm", "MAVEX_EXT_SED_B64"))
 open("dist/ext-diffutils.wasm.js", "w").write(blob(".scratch/async/diffutils.wasm", "MAVEX_EXT_DIFFUTILS_B64"))
-for n in ("awk", "kibi", "find", "xargs", "tar"):
+for n in ("awk", "kibi", "mwget", "find", "xargs", "tar"):
     open(f"dist/ext-{n}.wasm.js", "w").write(blob(f".scratch/async/{n}.wasm", f"MAVEX_EXT_{n.upper()}_B64"))
 open("dist/ext-crabfetch.wasm.js", "w").write(blob(".scratch/ext/crabfetch.wasm", "MAVEX_EXT_CRABFETCH_B64"))
 open("dist/ext-init.wasm.js", "w").write(blob(".scratch/async/init.wasm", "MAVEX_EXT_INIT_B64"))

@@ -1,0 +1,256 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index e2c913c..02476c9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -10,14 +10,13 @@ homepage = "https://github.com/rayylee/mwget"
+ documentation = "https://github.com/rayylee/mwget"
+ 
+ [dependencies]
+-tokio = { version = "1.53", features = ["full"] }
+-reqwest = { version = "0.13", features = ["stream", "rustls"], default-features = false }
++tokio = { version = "1.53", features = ["rt","macros","sync","time"] }
++reqwest = { path = "reqwest-shim" }
+ clap = { version = "4.6", features = ["derive"] }
+ url = "2.5"
+ thiserror = "2.0"
+ futures = "0.3"
+ chrono = "0.4"
+-crossterm = "0.29"
+ scraper = "0.27"
+ 
+ [profile.release]
+diff --git a/reqwest-shim/Cargo.toml b/reqwest-shim/Cargo.toml
+new file mode 100644
+index 0000000..5e29375
+--- /dev/null
++++ b/reqwest-shim/Cargo.toml
+@@ -0,0 +1,9 @@
++[package]
++name = "reqwest"
++version = "0.13.0"
++edition = "2021"
++
++[dependencies]
++http = "1"
++bytes = "1"
++futures = "0.3"
+diff --git a/reqwest-shim/src/lib.rs b/reqwest-shim/src/lib.rs
+new file mode 100644
+index 0000000..e4bc2e9
+--- /dev/null
++++ b/reqwest-shim/src/lib.rs
+@@ -0,0 +1,144 @@
++#![allow(unsafe_code)]
++//! Minimal reqwest-compatible client over MavexOS `mavex.fetch_*` host imports.
++use bytes::Bytes;
++pub use http::StatusCode;
++use http::{HeaderMap, HeaderName, HeaderValue};
++use std::fmt;
++
++pub mod header {
++    pub use http::header::*;
++}
++
++pub mod redirect {
++    pub struct Policy;
++    impl Policy {
++        pub fn limited(_n: usize) -> Policy { Policy }
++    }
++}
++
++#[link(wasm_import_module = "mavex")]
++unsafe extern "C" {
++    fn fetch_open(mp: *const u8, mn: usize, up: *const u8, un: usize, hp: *const u8, hn: usize, bp: *const u8, bn: usize) -> i32;
++    fn fetch_wait(id: i32) -> i32;
++    fn fetch_info(id: i32, out: *mut u32) -> i32;
++    fn fetch_read(id: i32, which: i32, off: usize, ptr: *mut u8, len: usize) -> i32;
++    fn fetch_close(id: i32) -> i32;
++}
++
++pub struct Error(String);
++impl fmt::Debug for Error {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
++}
++impl fmt::Display for Error {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
++}
++impl std::error::Error for Error {}
++pub type Result<T> = std::result::Result<T, Error>;
++
++pub struct ClientBuilder { ua: Option<String> }
++#[derive(Clone)]
++pub struct Client { ua: Option<String> }
++
++impl Client {
++    pub fn builder() -> ClientBuilder { ClientBuilder { ua: None } }
++    pub fn get(&self, url: &str) -> RequestBuilder { self.req("GET", url) }
++    pub fn head(&self, url: &str) -> RequestBuilder { self.req("HEAD", url) }
++    fn req(&self, m: &str, url: &str) -> RequestBuilder {
++        let mut headers = Vec::new();
++        if let Some(ua) = &self.ua { headers.push(("user-agent".into(), ua.clone())); }
++        RequestBuilder { method: m.into(), url: url.into(), headers }
++    }
++}
++
++impl ClientBuilder {
++    pub fn user_agent(mut self, ua: &str) -> Self { self.ua = Some(ua.to_string()); self }
++    pub fn tls_danger_accept_invalid_certs(self, _on: bool) -> Self { self }
++    pub fn redirect(self, _p: redirect::Policy) -> Self { self }
++    pub fn build(self) -> Result<Client> { Ok(Client { ua: self.ua }) }
++}
++
++pub struct RequestBuilder { method: String, url: String, headers: Vec<(String, String)> }
++
++impl RequestBuilder {
++    pub fn header(mut self, k: impl AsRef<str>, v: impl AsRef<str>) -> Self {
++        self.headers.push((k.as_ref().to_string(), v.as_ref().to_string()));
++        self
++    }
++    pub fn basic_auth(self, user: impl fmt::Display, pass: Option<impl fmt::Display>) -> Self {
++        let raw = format!("{}:{}", user, pass.map(|p| p.to_string()).unwrap_or_default());
++        self.header("authorization", format!("Basic {}", b64(raw.as_bytes())))
++    }
++    pub async fn send(self) -> Result<Response> {
++        let hs: String = self.headers.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
++        let id = unsafe {
++            fetch_open(self.method.as_ptr(), self.method.len(), self.url.as_ptr(), self.url.len(), hs.as_ptr(), hs.len(), std::ptr::null(), 0)
++        };
++        unsafe { fetch_wait(id) };
++        let mut info = [0u32; 5];
++        unsafe { fetch_info(id, info.as_mut_ptr()) };
++        let read = |which: i32, n: u32| -> Vec<u8> {
++            let mut buf = vec![0u8; n as usize];
++            let mut off = 0;
++            while off < buf.len() {
++                let got = unsafe { fetch_read(id, which, off, buf.as_mut_ptr().add(off), buf.len() - off) };
++                if got <= 0 { break; }
++                off += got as usize;
++            }
++            buf.truncate(off);
++            buf
++        };
++        let kind = info[1];
++        if kind != 0 {
++            let note = String::from_utf8_lossy(&read(2, info[4])).into_owned();
++            unsafe { fetch_close(id) };
++            return Err(Error(match kind {
++                2 => format!("blocked by CORS (the browser refused to expose this site to MavexOS): {note}"),
++                _ => format!("could not reach {}: {note}", self.url),
++            }));
++        }
++        let body = read(0, info[2]);
++        let htxt = String::from_utf8_lossy(&read(1, info[3])).into_owned();
++        unsafe { fetch_close(id) };
++        let mut headers = HeaderMap::new();
++        for line in htxt.lines() {
++            if let Some((k, v)) = line.split_once(": ") {
++                if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
++                    headers.append(k, v);
++                }
++            }
++        }
++        let status = StatusCode::from_u16(info[0] as u16).unwrap_or(StatusCode::BAD_GATEWAY);
++        Ok(Response { status, headers, body: Bytes::from(body), url: self.url })
++    }
++}
++
++#[derive(Debug)]
++pub struct Response { status: StatusCode, headers: HeaderMap, body: Bytes, url: String }
++
++impl Response {
++    pub fn status(&self) -> StatusCode { self.status }
++    pub fn headers(&self) -> &HeaderMap { &self.headers }
++    pub fn error_for_status(self) -> Result<Self> {
++        if self.status.is_client_error() || self.status.is_server_error() {
++            Err(Error(format!("HTTP status {} for url ({})", self.status, self.url)))
++        } else { Ok(self) }
++    }
++    pub async fn text(self) -> Result<String> { Ok(String::from_utf8_lossy(&self.body).into_owned()) }
++    pub fn bytes_stream(self) -> impl futures::Stream<Item = Result<Bytes>> {
++        let chunks: Vec<Result<Bytes>> = self.body.chunks(64 * 1024).map(|c| Ok(Bytes::copy_from_slice(c))).collect();
++        futures::stream::iter(chunks)
++    }
++}
++
++fn b64(d: &[u8]) -> String {
++    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++    let mut o = String::new();
++    for c in d.chunks(3) {
++        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
++        o.push(T[(n >> 18) as usize & 63] as char);
++        o.push(T[(n >> 12) as usize & 63] as char);
++        o.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
++        o.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
++    }
++    o
++}
+diff --git a/src/downloader.rs b/src/downloader.rs
+index 7f8e704..cea4c62 100644
+--- a/src/downloader.rs
++++ b/src/downloader.rs
+@@ -51,14 +51,8 @@ impl Downloader {
+ 
+     async fn resolve_ip(&self, host: &str, port: &str) -> Result<String> {
+         let addr = format!("{}:{}", host, port);
+-        let mut addrs = tokio::net::lookup_host(&addr)
+-            .await
+-            .map_err(|e| MwgetError::DownloadFailed(format!("DNS resolution failed: {}", e)))?;
+-        if let Some(sock_addr) = addrs.next() {
+-            Ok(sock_addr.ip().to_string())
+-        } else {
+-            Ok("unknown".to_string())
+-        }
++        let _ = addr;
++        Ok("unknown".to_string())
+     }
+ 
+     fn get_port(&self) -> String {
+diff --git a/src/main.rs b/src/main.rs
+index 0ed273c..39e3acb 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -2,8 +2,11 @@ use clap::Parser;
+ use mwget::{Cli, Downloader, RecursiveDownloader, Result};
+ use std::env;
+ 
+-#[tokio::main]
++#[tokio::main(flavor = "current_thread")]
+ async fn main() -> Result<()> {
++    if let Ok(pwd) = env::var("PWD") {
++        env::set_current_dir(pwd).ok();
++    }
+     // Manual parsing of two-character short arguments
+     let args: Vec<String> = env::args().collect();
+     let mut processed_args = Vec::new();
+diff --git a/src/progress.rs b/src/progress.rs
+index 13db4de..21127fc 100644
+--- a/src/progress.rs
++++ b/src/progress.rs
+@@ -1,5 +1,4 @@
+ use crate::formatter;
+-use crossterm::terminal;
+ use std::collections::HashMap;
+ use std::io::{Write, stderr};
+ use std::sync::Arc;
+@@ -111,9 +110,7 @@ impl ProgressTracker {
+         // Get terminal columns
+         const DEFAULT_COLS: usize = 80;
+         const MIN_COLS: usize = 51;
+-        let cols = terminal::size()
+-            .map(|(c, _)| c as usize)
+-            .unwrap_or(DEFAULT_COLS)
++        let cols = DEFAULT_COLS
+             .max(MIN_COLS);
+         let usable = cols.saturating_sub(1);
+ 
+@@ -193,9 +190,7 @@ impl ProgressTracker {
+         // Get terminal columns
+         const DEFAULT_COLS: usize = 80;
+         const MIN_COLS: usize = 51;
+-        let cols = terminal::size()
+-            .map(|(c, _)| c as usize)
+-            .unwrap_or(DEFAULT_COLS)
++        let cols = DEFAULT_COLS
+             .max(MIN_COLS);
+         let usable = cols.saturating_sub(1);
+ 

@@ -23,6 +23,7 @@ build sed uutils/sed 5e2821e69da7eb08304e17807bd89188dc868a22 sed uutils-sed-was
 build diffutils uutils/diffutils 919194279e5a27236e71dcf67d18c88558176c51 diffutils uutils-diffutils-wasi.patch
 CARGO_PROFILE_RELEASE_OPT_LEVEL=3 build awk uutils/awk c7a7cd64d68507d61b125f02713850cf1973a06d awk uutils-awk-wasi.patch awk +nightly
 build kibi ilai-deutel/kibi d42f6e34c7d0ea717aacc64cb2f2da4171f7b2b4 kibi kibi-wasi.patch kibi +nightly
+build mwget rayylee/mwget 33d8f90e6c489b6c19dc47f5fa0cfcc4040da8df mwget mwget-wasi.patch mwget +nightly
 build find uutils/findutils b861b03e27e4d941e6b34249d9496bc2ceaee80a find findutils-wasi.patch findutils
 build xargs uutils/findutils b861b03e27e4d941e6b34249d9496bc2ceaee80a xargs "" findutils
 # uutils tar uses the `tar` crate, whose wasm32 header code is unimplemented!(); patch a local copy
@@ -47,7 +48,7 @@ else
   kdir=.scratch/ext/kernel-src
   if [ ! -d "$kdir" ]; then
     git clone -q https://github.com/MavexOS/mavex-kernel "$kdir"
-    git -C "$kdir" checkout -q e75ab33b03be143f8542d1c2b514d9b161983c36
+    git -C "$kdir" checkout -q da01f54d4d2adb092b8f0523c3a4864bfa8afb90
   fi
 fi
 (cd "$kdir" && cargo build --release --target wasm32-unknown-unknown -p mavex-kernel 2>&1 | tail -1)

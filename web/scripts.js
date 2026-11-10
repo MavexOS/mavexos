@@ -587,7 +587,7 @@ async function boot() {
   const rgMod = R.registerModule("rg", window.MAVEX_EXT_RG_B64);
   const sedMod = R.registerModule("sed", window.MAVEX_EXT_SED_B64);
   const dfMod = R.registerModule("diffutils", window.MAVEX_EXT_DIFFUTILS_B64);
-  const exMods = ["awk", "kibi", "find", "xargs", "tar"].map((n) => R.registerModule(n, window["MAVEX_EXT_" + n.toUpperCase() + "_B64"]));
+  const exMods = ["awk", "kibi", "mwget", "find", "xargs", "tar"].map((n) => R.registerModule(n, window["MAVEX_EXT_" + n.toUpperCase() + "_B64"]));
   const cfMod = R.registerModule("crabfetch", window.MAVEX_EXT_CRABFETCH_B64);
   const initMod = R.registerModule("init", window.MAVEX_EXT_INIT_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
@@ -608,6 +608,7 @@ async function boot() {
   R.install("xargs", []);
   R.install("tar", []);
   R.install("kibi", ["nano"]);
+  R.install("mwget", ["wget"]);
   R.install("diffutils", ["diff", "cmp", "diff3", "sdiff"]);
   R.install("crabfetch", []);
   R.install("init", ["systemctl", "journalctl", "reboot", "poweroff", "halt", "shutdown"]);
