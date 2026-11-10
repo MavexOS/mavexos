@@ -37,14 +37,19 @@ timeout = 30
 relay = https://r.jina.ai/{raw}
 relay = https://api.allorigins.win/raw?url={url}
 relay = https://api.codetabs.com/v1/proxy/?quest={url}
+# DNS-over-HTTPS resolvers for MavexOS's own resolver (tried in order, first answer wins).
+# This only answers DNS lookups; fetch() still uses the browser's DNS to connect.
+doh = https://cloudflare-dns.com/dns-query
+doh = https://dns.google/dns-query
+doh = https://dns.quad9.net/dns-query
 `;
 function netPolicy() {
   const txt = typeof sys.readFile(NET_CONF) === "string" ? sys.readFile(NET_CONF) : NET_DEFAULT;
-  const p = { mode: "direct-only", timeout: 30, relays: [] };
+  const p = { mode: "direct-only", timeout: 30, relays: [], doh: [] };
   for (const l of txt.split("\n")) {
-    const m = l.match(/^\s*(mode|timeout|relay)\s*=\s*(\S+)\s*$/);
+    const m = l.match(/^\s*(mode|timeout|relay|doh)\s*=\s*(\S+)\s*$/);
     if (!m) continue;
-    if (m[1] === "relay") p.relays.push(m[2]); else if (m[1] === "timeout") p.timeout = Math.max(1, +m[2] || 30); else p.mode = m[2];
+    if (m[1] === "relay") p.relays.push(m[2]); else if (m[1] === "doh") p.doh.push(m[2]); else if (m[1] === "timeout") p.timeout = Math.max(1, +m[2] || 30); else p.mode = m[2];
   }
   return p;
 }
@@ -65,6 +70,7 @@ async function netAttempt(url, req, secs) {
   }
 }
 globalThis.mavexFetch = async (req) => {
+  if (req.method === "DNS") return globalThis.mavexDns(req.body);
   const pol = netPolicy();
   const direct = () => netAttempt(req.url, req, pol.timeout);
   const viaRelays = async () => {
@@ -81,6 +87,39 @@ globalThis.mavexFetch = async (req) => {
   let r = null;
   for (const step of order) { r = await step(); if (r.kind === 0) return r; }
   return r;
+};
+
+// DNS wire message in, wire message out, over DoH (RFC 8484 POST). Queries are padded to a multiple of 128 bytes
+// with an EDNS(0) padding option (RFC 7830/8467) so lengths leak less. Failover across the configured resolvers.
+function dnsPad(q) {
+  const u = new Uint8Array(q), dv = new DataView(u.buffer);
+  if (u.length < 12 || dv.getUint16(10) > 0) return u;
+  // Only add padding when the query has no OPT record: append OPT(+padding) and bump ARCOUNT.
+  const hdr = 11, opt = 4 + 7;
+  let ar = dv.getUint16(10);
+  const base = u.length + hdr;
+  const pad = (128 - ((base + 4) % 128)) % 128;
+  const out = new Uint8Array(base + 4 + pad);
+  out.set(u);
+  const o = new DataView(out.buffer);
+  let i = u.length;
+  out[i++] = 0; o.setUint16(i, 41); i += 2; o.setUint16(i, 1232); i += 2; o.setUint32(i, 0); i += 4;
+  o.setUint16(i, 4 + pad); i += 2; o.setUint16(i, 12); i += 2; o.setUint16(i, pad); i += 2;
+  o.setUint16(10, ar + 1);
+  return out;
+}
+globalThis.mavexDns = async (wire) => {
+  const pol = netPolicy();
+  const q = dnsPad(wire);
+  let last = "no DoH resolvers configured";
+  for (const ep of pol.doh) {
+    try {
+      const r = await fetch(ep, { method: "POST", headers: { "content-type": "application/dns-message", accept: "application/dns-message" }, body: q, credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(pol.timeout * 1000) });
+      if (r.ok) return { kind: 0, body: new Uint8Array(await r.arrayBuffer()), note: new URL(ep).host };
+      last = new URL(ep).host + ": HTTP " + r.status;
+    } catch (e) { last = new URL(ep).host + ": " + (e && e.message || "failed"); }
+  }
+  return { kind: 1, note: last };
 };
 
 /* ---------- persistence (IndexedDB) ---------- */

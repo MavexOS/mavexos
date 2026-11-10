@@ -172,6 +172,14 @@ async function runBrush(name, type) {
   await p.evaluate(() => { globalThis.mavexFetch = async (r) => r.url.endsWith("/nope") ? { kind: 2, note: "mock" } : { kind: 0, status: 200, headers: "content-type: text/plain\ncontent-length: 11\n", body: new TextEncoder().encode("wget-body-ok") }; });
   await ty("wget -q -O wg.txt http://example.test/f; cat wg.txt; echo; wget -q http://example.test/nope; echo wget-rc-$?");
   await new Promise((r) => setTimeout(r, 4000));
+  const doh = await p.evaluate(async () => {
+    const seen = [], rf = window.fetch;
+    window.fetch = async (u, o) => { seen.push(new URL(u).host + ":" + o.body.length); return seen.length < 2 ? new Response("x", { status: 503 }) : new Response(new Uint8Array([9, 9]), { status: 200 }); };
+    const r = await globalThis.mavexDns(new Uint8Array([1, 2, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 3, 119, 119, 119, 0, 0, 1, 0, 1]));
+    window.fetch = rf;
+    return JSON.stringify([r.kind, r.note, seen]);
+  });
+  if (doh !== '[0,"dns.google",["cloudflare-dns.com:128","dns.google:128"]]') fails.push("doh failover+padding " + doh);
   await ty("echo p q r | awk '{print $2 NF}'");
   await new Promise((r) => setTimeout(r, 2500));
   await ty("find tx -name f | xargs cat");
