@@ -1,0 +1,15 @@
+diff --git a/src/main.rs b/src/main.rs
+index 6d57d2f..ab37ae3 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -29,6 +29,10 @@ use crate::{
+ };
+ 
+ fn main() {
++    #[cfg(target_os = "wasi")]
++    if let Ok(pwd) = std::env::var("PWD") {
++        let _ = std::env::set_current_dir(pwd);
++    }
+     if let Err(e) = ensure_consistent_panic(uu_main) {
+         exit_err(Some(e))
+     }

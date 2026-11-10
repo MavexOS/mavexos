@@ -5,6 +5,7 @@ set -e
 cd "$(dirname "$0")/.."
 export CARGO_PROFILE_RELEASE_STRIP=symbols CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_DEBUG=false
 export CC_wasm32_wasip1=clang CFLAGS_wasm32_wasip1="--target=wasm32-wasip1 --sysroot=/usr"  # needs apt: wasi-libc libclang-rt-dev-wasm32
+export WASI_SYSROOT=/usr
 mkdir -p .scratch/ext
 build() { # name repo ref binname [patch] [srcdir-name] [cargo-toolchain]
   name=$1; repo=$2; ref=$3; bin=$4; patch=$5; src=${6:-$name}; tc=$7
@@ -20,6 +21,7 @@ build() { # name repo ref binname [patch] [srcdir-name] [cargo-toolchain]
 build rg BurntSushi/ripgrep 14.1.1 rg ripgrep-wasi.patch
 build sed uutils/sed 5e2821e69da7eb08304e17807bd89188dc868a22 sed uutils-sed-wasi.patch
 build diffutils uutils/diffutils 919194279e5a27236e71dcf67d18c88558176c51 diffutils uutils-diffutils-wasi.patch
+CARGO_PROFILE_RELEASE_OPT_LEVEL=3 build awk uutils/awk c7a7cd64d68507d61b125f02713850cf1973a06d awk uutils-awk-wasi.patch awk +nightly
 build find uutils/findutils b861b03e27e4d941e6b34249d9496bc2ceaee80a find findutils-wasi.patch findutils
 build xargs uutils/findutils b861b03e27e4d941e6b34249d9496bc2ceaee80a xargs "" findutils
 # uutils tar uses the `tar` crate, whose wasm32 header code is unimplemented!(); patch a local copy

@@ -495,7 +495,7 @@ async function boot() {
   const rgMod = R.registerModule("rg", window.MAVEX_EXT_RG_B64);
   const sedMod = R.registerModule("sed", window.MAVEX_EXT_SED_B64);
   const dfMod = R.registerModule("diffutils", window.MAVEX_EXT_DIFFUTILS_B64);
-  const exMods = ["find", "xargs", "tar"].map((n) => R.registerModule(n, window["MAVEX_EXT_" + n.toUpperCase() + "_B64"]));
+  const exMods = ["awk", "find", "xargs", "tar"].map((n) => R.registerModule(n, window["MAVEX_EXT_" + n.toUpperCase() + "_B64"]));
   const cfMod = R.registerModule("crabfetch", window.MAVEX_EXT_CRABFETCH_B64);
   const initMod = R.registerModule("init", window.MAVEX_EXT_INIT_B64);
   write("\x1b[1;36mMavexOS\x1b[0m bootloader: loading kernel...\n");
@@ -511,6 +511,7 @@ async function boot() {
   R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit"]);
   R.install("rg", []);
   R.install("sed", []);
+  R.install("awk", []);
   R.install("find", []);
   R.install("xargs", []);
   R.install("tar", []);
