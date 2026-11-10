@@ -22,6 +22,67 @@ const sys = {
   complete: (word, first) => withStr(word, (p, n) => { const r = K.k_shell_complete(p, n, first ? 1 : 0); return r === 0 ? [] : staged(r).split("\n"); }),
 };
 
+/* ---------- network policy (fetch import) ---------- */
+const NET_CONF = "/etc/mavex/network";
+const NET_DEFAULT = `# MavexOS network policy (read on every request)
+# mode: direct-only | direct-first | relay-first | relay-only
+#   direct-only  browser fetch(); needs the site to send CORS headers; uses the browser's own DNS
+#   direct-first direct, then the relays below if the site cannot be reached
+#   relay-first  relays in order (helps against blocked sites), then direct as a last resort
+#   relay-only   never connect directly
+# A relay can read everything that passes through it. Do not use it for private or financial data.
+mode = direct-only
+timeout = 30
+# {url} is the percent-encoded target, {raw} the plain target. GET and HEAD only.
+relay = https://r.jina.ai/{raw}
+relay = https://api.allorigins.win/raw?url={url}
+relay = https://api.codetabs.com/v1/proxy/?quest={url}
+`;
+function netPolicy() {
+  const txt = typeof sys.readFile(NET_CONF) === "string" ? sys.readFile(NET_CONF) : NET_DEFAULT;
+  const p = { mode: "direct-only", timeout: 30, relays: [] };
+  for (const l of txt.split("\n")) {
+    const m = l.match(/^\s*(mode|timeout|relay)\s*=\s*(\S+)\s*$/);
+    if (!m) continue;
+    if (m[1] === "relay") p.relays.push(m[2]); else if (m[1] === "timeout") p.timeout = Math.max(1, +m[2] || 30); else p.mode = m[2];
+  }
+  return p;
+}
+async function netAttempt(url, req, secs) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), secs * 1000);
+  const headers = new Headers();
+  for (const l of req.headers.split("\n")) { const i = l.indexOf(":"); if (i > 0) try { headers.set(l.slice(0, i).trim(), l.slice(i + 1).trim()); } catch (_) {} }
+  try {
+    const r = await fetch(url, { method: req.method, headers, body: req.body, redirect: "follow", signal: ctl.signal, credentials: "omit", cache: "no-store" });
+    let hd = "";
+    r.headers.forEach((v, k) => { hd += k + ": " + v + "\n"; });
+    return { kind: 0, status: r.status, headers: hd, body: new Uint8Array(await r.arrayBuffer()), note: r.url && r.url !== url ? "final url: " + r.url : "" };
+  } catch (e) {
+    if (ctl.signal.aborted) return { kind: 1, note: "timed out after " + secs + "s" };
+    // The browser hides why fetch failed; an opaque no-cors probe tells "reachable but no CORS headers" from "unreachable".
+    try { await fetch(url, { mode: "no-cors", method: "GET", signal: AbortSignal.timeout(secs * 1000), credentials: "omit" }); return { kind: 2, note: "blocked by CORS: the server answered but does not allow cross-origin reads" }; }
+    catch (_) { return { kind: 1, note: "could not reach the server (DNS failure, blocked, offline, or an https certificate problem)" }; }
+  }
+}
+globalThis.mavexFetch = async (req) => {
+  const pol = netPolicy();
+  const direct = () => netAttempt(req.url, req, pol.timeout);
+  const viaRelays = async () => {
+    if (!/^(GET|HEAD)$/i.test(req.method)) return { kind: 1, note: "relays only support GET and HEAD" };
+    let last = { kind: 1, note: "no relays configured" };
+    for (const tpl of pol.relays) {
+      const r = await netAttempt(tpl.replace("{url}", encodeURIComponent(req.url)).replace("{raw}", req.url), req, pol.timeout);
+      if (r.kind === 0 && r.status < 500 && r.status !== 401 && r.status !== 403 && r.status !== 429) { r.note = "via relay " + new URL(tpl.replace(/\{(url|raw)\}/g, "x")).host + " (the relay can read this request and response)"; return r; }
+      last = { kind: r.kind || 1, note: "relay " + new URL(tpl.replace(/\{(url|raw)\}/g, "x")).host + ": " + (r.note || "HTTP " + r.status) };
+    }
+    return last;
+  };
+  const order = { "direct-only": [direct], "direct-first": [direct, viaRelays], "relay-first": [viaRelays, direct], "relay-only": [viaRelays] }[pol.mode] || [direct];
+  let r = null;
+  for (const step of order) { r = await step(); if (r.kind === 0) return r; }
+  return r;
+};
+
 /* ---------- persistence (IndexedDB) ---------- */
 const PERSIST = {
   db: null, known: new Map(), lastHash: -1, saving: false,
