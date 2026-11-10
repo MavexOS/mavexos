@@ -22,6 +22,7 @@ build rg BurntSushi/ripgrep 14.1.1 rg ripgrep-wasi.patch
 build sed uutils/sed 5e2821e69da7eb08304e17807bd89188dc868a22 sed uutils-sed-wasi.patch
 build diffutils uutils/diffutils 919194279e5a27236e71dcf67d18c88558176c51 diffutils uutils-diffutils-wasi.patch
 CARGO_PROFILE_RELEASE_OPT_LEVEL=3 build awk uutils/awk c7a7cd64d68507d61b125f02713850cf1973a06d awk uutils-awk-wasi.patch awk +nightly
+build kibi ilai-deutel/kibi d42f6e34c7d0ea717aacc64cb2f2da4171f7b2b4 kibi kibi-wasi.patch kibi +nightly
 build find uutils/findutils b861b03e27e4d941e6b34249d9496bc2ceaee80a find findutils-wasi.patch findutils
 build xargs uutils/findutils b861b03e27e4d941e6b34249d9496bc2ceaee80a xargs "" findutils
 # uutils tar uses the `tar` crate, whose wasm32 header code is unimplemented!(); patch a local copy
@@ -46,7 +47,7 @@ else
   kdir=.scratch/ext/kernel-src
   if [ ! -d "$kdir" ]; then
     git clone -q https://github.com/MavexOS/mavex-kernel "$kdir"
-    git -C "$kdir" checkout -q 2d1d31910e3fa7df37f31c19b3f8f1ecf92c6607
+    git -C "$kdir" checkout -q e75ab33b03be143f8542d1c2b514d9b161983c36
   fi
 fi
 (cd "$kdir" && cargo build --release --target wasm32-unknown-unknown -p mavex-kernel 2>&1 | tail -1)

@@ -1,0 +1,64 @@
+diff --git a/src/main.rs b/src/main.rs
+index 32fe086..7ce9b29 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -14,6 +14,10 @@ use kibi::{Error, run, stdin};
+ /// Any error that occur during the execution of the program will be returned by
+ /// this function.
+ fn main() -> Result<(), Error> {
++    #[cfg(target_os = "wasi")]
++    if let Ok(pwd) = std::env::var("PWD") {
++        std::env::set_current_dir(pwd).ok();
++    }
+     let mut args = std::env::args();
+     match (args.nth(1).as_deref(), args.next().as_deref(), /* remaining_args= */ args.len()) {
+         (Some("--version"), None | Some("--"), 0) => println!("kibi {}", env!("CARGO_PKG_VERSION")),
+diff --git a/src/wasi.rs b/src/wasi.rs
+index 2914124..124be84 100644
+--- a/src/wasi.rs
++++ b/src/wasi.rs
+@@ -7,7 +7,9 @@
+ //! WASI-specific structs and functions. Will be imported as `sys` on WASI
+ //! systems.
+ 
+-use std::{fs::File, io};
++#![allow(unsafe_code)]
++
++use std::io;
+ 
+ use crate::Error;
+ pub use crate::xdg::*;
+@@ -15,6 +17,11 @@ pub use crate::xdg::*;
+ #[derive(Copy, Clone)]
+ pub struct TermMode;
+ 
++#[link(wasm_import_module = "mavex")]
++unsafe extern "C" {
++    fn tty_raw(on: i32) -> i32;
++}
++
+ /// Return the current window size as (rows, columns).
+ /// By returning an error we cause kibi to fall back to another method of
+ /// getting the window size
+@@ -32,18 +39,18 @@ pub const fn has_window_size_changed() -> bool { false }
+ /// Set the terminal mode. On WASI platforms, this does nothing.
+ #[expect(clippy::unnecessary_wraps)] // Result required on other platforms
+ #[expect(clippy::trivially_copy_pass_by_ref)]
+-pub const fn set_term_mode(_term: &TermMode) -> io::Result<()> { Ok(()) }
++pub fn set_term_mode(_term: &TermMode) -> io::Result<()> { unsafe { tty_raw(0) }; Ok(()) }
+ 
+ // Opening the file /dev/tty is effectively the same as `raw_mode`
+ #[expect(clippy::unnecessary_wraps)] // Result required on other platforms
+-pub const fn enable_raw_mode() -> io::Result<TermMode> { Ok(TermMode {}) }
++pub fn enable_raw_mode() -> io::Result<TermMode> { unsafe { tty_raw(1) }; Ok(TermMode {}) }
+ 
+ /// Construct a new handle to the standard input of the current process.
+ ///
+ /// # Errors
+ ///
+ /// This function will return an error if /dev/tty cannot be open.
+-pub fn stdin() -> io::Result<impl io::BufRead> { Ok(io::BufReader::new(File::open("/dev/tty")?)) }
++pub fn stdin() -> io::Result<impl io::BufRead> { Ok(io::BufReader::with_capacity(1, io::stdin())) }
+ 
+ pub fn path(filename: &str) -> std::path::PathBuf {
+     // If the filename is absolute then it starts with a forward slash and we
