@@ -11,6 +11,7 @@ mod stty;
 mod sysutils;
 mod top;
 mod wg;
+mod netutil;
 
 use std::process::exit;
 
@@ -444,6 +445,8 @@ fn main() {
         "readlink" => paths::readlink(&args),
         "passwd" => auth::passwd(&args),
         "ip" => ip::main(&args),
+        "ping" => netutil::ping(&args),
+        "mavex-backup" | "mavex-restore" => netutil::backup_restore(&name),
         "wg" => wg::wg(&args),
         "wg-quick" => wg::wg_quick(&args),
         "uname" => sysutils::uname(&args),

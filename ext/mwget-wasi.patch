@@ -36,7 +36,7 @@ index 0000000..5e29375
 +futures = "0.3"
 diff --git a/reqwest-shim/src/lib.rs b/reqwest-shim/src/lib.rs
 new file mode 100644
-index 0000000..e4bc2e9
+index 0000000..0a7ad02
 --- /dev/null
 +++ b/reqwest-shim/src/lib.rs
 @@ -0,0 +1,144 @@
@@ -134,7 +134,7 @@ index 0000000..e4bc2e9
 +            let note = String::from_utf8_lossy(&read(2, info[4])).into_owned();
 +            unsafe { fetch_close(id) };
 +            return Err(Error(match kind {
-+                2 => format!("blocked by CORS (the browser refused to expose this site to MavexOS): {note}"),
++                2 => note,
 +                _ => format!("could not reach {}: {note}", self.url),
 +            }));
 +        }
@@ -206,16 +206,24 @@ index 7f8e704..cea4c62 100644
  
      fn get_port(&self) -> String {
 diff --git a/src/main.rs b/src/main.rs
-index 0ed273c..39e3acb 100644
+index 0ed273c..6a4ea41 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -2,8 +2,11 @@ use clap::Parser;
+@@ -2,8 +2,18 @@ use clap::Parser;
  use mwget::{Cli, Downloader, RecursiveDownloader, Result};
  use std::env;
  
 -#[tokio::main]
+-async fn main() -> Result<()> {
 +#[tokio::main(flavor = "current_thread")]
- async fn main() -> Result<()> {
++async fn main() {
++    if let Err(e) = real_main().await {
++        eprintln!("wget: {e}");
++        std::process::exit(1);
++    }
++}
++
++async fn real_main() -> Result<()> {
 +    if let Ok(pwd) = env::var("PWD") {
 +        env::set_current_dir(pwd).ok();
 +    }

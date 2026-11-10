@@ -71,6 +71,8 @@ async function netAttempt(url, req, secs) {
 }
 globalThis.mavexFetch = async (req) => {
   if (req.method === "DNS") return globalThis.mavexDns(req.body);
+  if (req.method === "BACKUP") return storageBackup();
+  if (req.method === "RESTORE") return storageRestore();
   const pol = netPolicy();
   const direct = () => netAttempt(req.url, req, pol.timeout);
   const viaRelays = async () => {
@@ -172,6 +174,35 @@ const PERSIST = {
     this.saving = false;
   },
 };
+
+async function storageBackup() {
+  try {
+    await PERSIST.save(true);
+    const n = K.k_persist_dump(); const blob = new Uint8Array(K.memory.buffer, K.k_result_ptr(), n).slice();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
+    a.download = "mavexos-backup.bin"; document.body.appendChild(a); a.click(); a.remove();
+    return { kind: 0, note: "saved mavexos-backup.bin (" + blob.length + " bytes) through your browser's download" };
+  } catch (e) { return { kind: 1, note: String(e && e.message || e) }; }
+}
+function storageRestore() {
+  return new Promise((res) => {
+    const inp = document.createElement("input"); inp.type = "file"; inp.style.display = "none"; document.body.appendChild(inp);
+    inp.addEventListener("change", async () => {
+      try {
+        const f = inp.files[0]; if (!f) return res({ kind: 1, note: "no file chosen" });
+        const blob = new Uint8Array(await f.arrayBuffer()); const ents = PERSIST.split(blob);
+        if (!ents.length) return res({ kind: 1, note: "not a MavexOS backup" });
+        await PERSIST.tx("readwrite", (s) => { s.clear(); for (const e of ents) s.put(e.bytes, e.path); });
+        PERSIST.db = null; // stop autosave overwriting the restored data
+        res({ kind: 0, note: "restored " + ents.length + " entries; reloading" });
+        setTimeout(() => location.reload(), 600);
+      } catch (e) { res({ kind: 1, note: String(e && e.message || e) }); }
+    });
+    inp.addEventListener("cancel", () => res({ kind: 1, note: "cancelled" }));
+    inp.click();
+  });
+}
 
 globalThis.mavexPower = async (kind) => {
   try { await PERSIST.save(true); } catch (e) {}
@@ -637,9 +668,15 @@ async function boot() {
   write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ \x1b[1;32m OK \x1b[0m ] storage: restored ${restored} entries from IndexedDB\n` : "[ \x1b[1;32m OK \x1b[0m ] storage: IndexedDB mounted (first boot on this device)\n");
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   await publishSysfs();
+  for (const [dir, uid] of [["/home/user", 1000], ["/root", 0]]) {
+    if (typeof sys.readFile(dir + "/.bashrc") !== "string") {
+      sys.writeFile(dir + "/.bashrc", "# ~/.bashrc: read by every interactive shell\n# alias ll='ls -la'\n# export EDITOR=nano\n");
+      withStr(dir + "/.bashrc", (p, n) => K.k_chown(p, n, uid, uid));
+    }
+  }
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit", "ping", "mavex-backup", "mavex-restore"]);
   R.install("rg", []);
   R.install("sed", []);
   R.install("awk", []);
