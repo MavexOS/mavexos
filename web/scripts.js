@@ -189,6 +189,25 @@ async function runLine(line) {
   running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
   try { write(await shellRun(line)); } finally { running = false; R.ttyReset(tt); vt.leave(); vt.resetModes(); }
 }
+let pend = null;
+function needMore(text) {
+  const lines = text.split("\n");
+  let tag = null, dash = false;
+  for (const ln of lines) {
+    if (tag !== null) { if ((dash ? ln.replace(/^\t+/, "") : ln) === tag) tag = null; continue; }
+    const m = ln.match(/<<(-?)\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][\w]*))/);
+    if (m && !/<<</.test(ln)) { tag = m[2] || m[3] || m[4]; dash = m[1] === "-"; }
+  }
+  if (tag !== null) return true;
+  let q = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === q) q = null; else if (q === '"' && c === "\\") i++; }
+    else if (c === "\\") i++;
+    else if (c === "'" || c === '"') q = c;
+  }
+  return q !== null || /\\$/.test(text);
+}
 async function enter() {
   const line = buf;
   if (running) { write((ts.echo ? buf : "") + "\n"); buf = ""; pos = 0; hidx = history.length; renderLine(); feed(line + "\n"); return; }
@@ -196,6 +215,11 @@ async function enter() {
   if (dead && tabs.list.length > 1) { closeTab(self); return; }
   if (dead) { write(promptText + "\n"); dead = false; reset(); write("\x1b[0m"); newPrompt(); return; }
   commitInput();
+  if (useBrush) {
+    const full = pend === null ? line : pend + "\n" + line;
+    if (needMore(full)) { pend = full; promptText = "> "; buf = ""; pos = 0; hidx = history.length; renderPrompt(); renderLine(); live = true; return; }
+    if (pend !== null) { pend = null; if (full.trim()) { history.push(full.replace(/\n/g, " ")); sys.writeFile(HIST, history.join("\n") + "\n"); await runLine(full); if (exited() && tabs.list.length > 1) { closeTab(self); return; } newPrompt(); return; } }
+  }
   if (line.trim() && history[history.length - 1] !== line) { history.push(line); if (history.length > 1000) history.shift(); sys.writeFile(HIST, history.join("\n") + "\n"); }
   if (line.trim()) await runLine(line);
   if (exited() && tabs.list.length > 1) { closeTab(self); return; }
@@ -397,6 +421,12 @@ function closeTab(t) {
   switchTab(tabs.list[Math.min(i, tabs.list.length - 1)]);
 }
 document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "c") {
+    e.preventDefault();
+    const t = String(window.getSelection());
+    if (t) (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(() => document.execCommand("copy"));
+    return;
+  }
   if (e.ctrlKey && e.altKey && !e.metaKey && e.key.toLowerCase() === "t") { e.preventDefault(); newTab(); return; }
   if (e.altKey && !e.ctrlKey && !e.metaKey && tabs.list.length > 1) {
     const d = /^[1-9]$/.test(e.key) ? +e.key - 1 : e.key === "PageUp" ? tabs.list.indexOf(tabs.cur) - 1 : e.key === "PageDown" ? tabs.list.indexOf(tabs.cur) + 1 : -1;
@@ -464,7 +494,8 @@ async function publishSysfs() {
   let brand = (ud && ud.brands.filter((b) => !/Not.?A.?Brand/i.test(b.brand)).pop()) || null;
   let name = brand ? brand.brand : /Firefox\/([\d.]+)/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "Browser";
   let ver = brand ? brand.version : (/(?:Firefox|Version)\/([\d.]+)/.exec(ua) || [])[1] || "";
-  const plat = (ud && ud.platform) || navigator.platform || "unknown";
+  let plat = (ud && ud.platform) || navigator.platform || "unknown";
+  if (ud && ud.getHighEntropyValues) { try { const h = await ud.getHighEntropyValues(["architecture", "bitness"]); if (h.architecture) plat += " " + (h.architecture === "arm" ? (h.bitness === "32" ? "armv7" : "aarch64") : h.architecture === "x86" ? (h.bitness === "64" ? "x86_64" : "i686") : h.architecture); } catch (_) {} }
   const dmi = "/sys/devices/virtual/dmi/id/";
   sysfile(dmi + "product_name", `${name}${ver ? " " + ver : ""} on ${plat}\n`);
   sysfile(dmi + "sys_vendor", `${location.protocol === "file:" ? "local file" : location.host}\n`);
@@ -503,7 +534,7 @@ async function boot() {
   await coreutils; await brushMod; await mxu; await rgMod; await sedMod; await Promise.all(exMods); await dfMod; await cfMod; await initMod;
   K.kmain();
   const restored = await PERSIST.init();
-  write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ ok ] storage: restored ${restored} entries from IndexedDB\n` : "[ ok ] storage: IndexedDB mounted (first boot on this device)\n");
+  write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ \x1b[1;32m OK \x1b[0m ] storage: restored ${restored} entries from IndexedDB\n` : "[ \x1b[1;32m OK \x1b[0m ] storage: IndexedDB mounted (first boot on this device)\n");
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   await publishSysfs();
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
