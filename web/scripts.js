@@ -51,6 +51,7 @@ function netPolicy() {
     if (!m) continue;
     if (m[1] === "relay") p.relays.push(m[2]); else if (m[1] === "doh") p.doh.push(m[2]); else if (m[1] === "timeout") p.timeout = Math.max(1, +m[2] || 30); else p.mode = m[2];
   }
+  if (!p.doh.length) p.doh = ["https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query", "https://dns.quad9.net/dns-query"];
   return p;
 }
 async function netAttempt(url, req, secs) {
@@ -59,9 +60,11 @@ async function netAttempt(url, req, secs) {
   for (const l of req.headers.split("\n")) { const i = l.indexOf(":"); if (i > 0) try { headers.set(l.slice(0, i).trim(), l.slice(i + 1).trim()); } catch (_) {} }
   try {
     const r = await fetch(url, { method: req.method, headers, body: req.body, redirect: "follow", signal: ctl.signal, credentials: "omit", cache: "no-store" });
+    const body = new Uint8Array(await r.arrayBuffer());
     let hd = "";
-    r.headers.forEach((v, k) => { hd += k + ": " + v + "\n"; });
-    return { kind: 0, status: r.status, headers: hd, body: new Uint8Array(await r.arrayBuffer()), note: r.url && r.url !== url ? "final url: " + r.url : "" };
+    r.headers.forEach((v, k) => { if (k !== "content-length" && k !== "content-encoding") hd += k + ": " + v + "\n"; });
+    if (req.method !== "HEAD") hd += "content-length: " + body.length + "\n";
+    return { kind: 0, status: r.status, headers: hd, body, note: r.url && r.url !== url ? "final url: " + r.url : "" };
   } catch (e) {
     if (ctl.signal.aborted) return { kind: 1, note: "timed out after " + secs + "s" };
     // The browser hides why fetch failed; an opaque no-cors probe tells "reachable but no CORS headers" from "unreachable".
@@ -668,6 +671,7 @@ async function boot() {
   write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ \x1b[1;32m OK \x1b[0m ] storage: restored ${restored} entries from IndexedDB\n` : "[ \x1b[1;32m OK \x1b[0m ] storage: IndexedDB mounted (first boot on this device)\n");
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   await publishSysfs();
+  if (typeof sys.readFile(NET_CONF) !== "string") { sys.mkdir("/etc/mavex"); sys.writeFile(NET_CONF, NET_DEFAULT); }
   for (const [dir, uid] of [["/home/user", 1000], ["/root", 0]]) {
     if (typeof sys.readFile(dir + "/.bashrc") !== "string") {
       sys.writeFile(dir + "/.bashrc", "# ~/.bashrc: read by every interactive shell\n# alias ll='ls -la'\n# export EDITOR=nano\n");
