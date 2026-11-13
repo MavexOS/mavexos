@@ -165,9 +165,9 @@ async function runBrush(name, type) {
   await p.keyboard.type("kibi-ok");
   await p.keyboard.press("Control+s");
   await new Promise((r) => setTimeout(r, 500));
-  await p.keyboard.press("Control+q");
+  await p.keyboard.press("Control+BracketRight");
   await new Promise((r) => setTimeout(r, 800));
-  await ty("cat kn.txt");
+  await ty("cat kn.txt; echo; ls /etc/mavex");
   await new Promise((r) => setTimeout(r, 1500));
   await p.evaluate(() => { globalThis.mavexFetch = async (r) => r.url.endsWith("/nope") ? { kind: 2, note: "mock" } : { kind: 0, status: 200, headers: "content-type: text/plain\ncontent-length: 11\n", body: new TextEncoder().encode("wget-body-ok") }; });
   await ty("wget -q -O wg.txt http://example.test/f; cat wg.txt; echo; wget -q http://example.test/nope; echo wget-rc-$?");
@@ -323,7 +323,8 @@ async function runBrush(name, type) {
   if (!t.includes("hello SEDOK")) fails.push("sed");
   if (!t.includes("\nq3\n")) fails.push("awk");
   if (!t.includes("\nheredoc-ok\n")) fails.push("heredoc");
-  if (!t.includes("\nkibi-ok")) fails.push("kibi");
+  if (!t.includes("\nkibi-ok")) fails.push("kibi (quit via ctrl+] remap)");
+  if (!/\bkeys\b/.test(t)) fails.push("etc/mavex/keys missing");
   if (!t.includes("\nwget-body-ok")) fails.push("wget body");
   if (!t.includes("reply from example.test: seq=2") || !t.includes("2 sent, 2 answered")) fails.push("ping");
   if (!t.includes("\nbashrc-ok")) fails.push("bashrc");
@@ -331,7 +332,7 @@ async function runBrush(name, type) {
   if (!/wget-rc-[1-9]/.test(t)) fails.push("wget cors error exit");
   if (!t.includes("\ntarok\n")) fails.push("tar roundtrip + find | xargs");
   if (!t.includes("< hello world") || !t.includes("> hallo world")) fails.push("diff");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.32\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.33\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);

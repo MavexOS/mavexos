@@ -23,6 +23,19 @@ const sys = {
 };
 
 /* ---------- network policy (fetch import) ---------- */
+const KEYS_CONF = "/etc/mavex/keys";
+const KEYS_DEFAULT = `# MavexOS key remaps for full-screen programs (read on every keypress)
+#
+# While a program has the terminal in raw mode it owns the keyboard, and MavexOS
+# stops the browser's own shortcuts wherever the browser lets a page do that.
+# Browsers never let a page override a few reserved keys (ctrl+q, ctrl+w, ctrl+t,
+# ctrl+n) in a normal tab, so a program that needs one of them can be given a
+# second key here.
+#
+# format:   program: key = key       (program is the command you typed)
+kibi: ctrl+] = ctrl+q
+nano: ctrl+] = ctrl+q
+`;
 const NET_CONF = "/etc/mavex/network";
 const NET_DEFAULT = `# MavexOS network policy (read on every request)
 # mode: direct-only | direct-first | relay-first | relay-only
@@ -304,9 +317,41 @@ function commitInput(extra) {
 let running = false;
 vt.onReply = (s) => feed(s);
 const feed = (str) => { const b = enc.encode(str), [p, n] = put(b); try { K.k_tty_input(tt, p, n); } finally { K.k_free(p, n); } R.pump(); };
+function keyChord(s) {
+  const p = s.trim().toLowerCase().split("+"), k = p.pop();
+  return { ctrl: p.includes("ctrl"), alt: p.includes("alt"), shift: p.includes("shift"), key: k };
+}
+function keyRemaps(prog) {
+  const txt = typeof sys.readFile(KEYS_CONF) === "string" ? sys.readFile(KEYS_CONF) : KEYS_DEFAULT, out = [];
+  for (const l of txt.split("\n")) {
+    const m = l.match(/^\s*([^\s:#]+)\s*:\s*(\S+)\s*=\s*(\S+)\s*$/);
+    if (m && m[1] === prog) out.push({ from: keyChord(m[2]), to: keyChord(m[3]) });
+  }
+  return out;
+}
+function fgProgram(line) {
+  for (const w of line.trim().split(/\s+/)) { if (/^(sudo|env|exec|command|time)$/.test(w) || w[0] === "-" || /^\w+=/.test(w)) continue; return w.replace(/^.*\//, ""); }
+  return "";
+}
+let fgProg = "";
+function keyBytes(c) {
+  if (c.ctrl && c.key.length === 1) { const n = c.key.charCodeAt(0); if (n >= 97 && n <= 122) return String.fromCharCode(n - 96); if (c.key === "]") return "\x1d"; if (c.key === "\\") return "\x1c"; }
+  const named = Object.keys(RAW_KEYS).find((x) => x.toLowerCase() === c.key);
+  return named ? RAW_KEYS[named] : c.key.length === 1 ? c.key : "";
+}
+async function keyCapture(on) {
+  // Chromium only: asks the browser to hand reserved keys to the page. It usually needs fullscreen.
+  try { if (on) await navigator.keyboard?.lock?.(); else navigator.keyboard?.unlock?.(); } catch (_) {}
+}
 const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~", Insert: "\x1b[2~", F1: "\x1bOP", F2: "\x1bOQ", F3: "\x1bOR", F4: "\x1bOS", F5: "\x1b[15~", F6: "\x1b[17~", F7: "\x1b[18~", F8: "\x1b[19~", F9: "\x1b[20~", F10: "\x1b[21~", F11: "\x1b[23~", F12: "\x1b[24~" };
 function rawKey(e) {
   const k = e.key;
+  if (e.ctrlKey || e.altKey) {
+    const kl = k.toLowerCase();
+    for (const r of keyRemaps(fgProg)) {
+      if (r.from.key === kl && r.from.ctrl === e.ctrlKey && r.from.alt === e.altKey && r.from.shift === e.shiftKey) { e.preventDefault(); const b = keyBytes(r.to); if (b) feed(b); return; }
+    }
+  }
   if (e.ctrlKey && !e.altKey && !e.metaKey && k.length === 1) {
     const l = k.toLowerCase();
     if (l === "c" && ts.isig) { e.preventDefault(); R.killForeground(tt); return; }
@@ -320,8 +365,9 @@ function rawKey(e) {
   if (k.length === 1) { e.preventDefault(); feed(k); if (ts.echo) write(k); }
 }
 async function runLine(line) {
-  running = true; promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
-  try { write(await shellRun(line)); } finally { running = false; R.ttyReset(tt); vt.leave(); vt.resetModes(); }
+  running = true; fgProg = fgProgram(line); promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
+  keyCapture(true);
+  try { write(await shellRun(line)); } finally { running = false; fgProg = ""; keyCapture(false); R.ttyReset(tt); vt.leave(); vt.resetModes(); }
 }
 let pend = null;
 function needMore(text) {
@@ -671,6 +717,7 @@ async function boot() {
   write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ \x1b[1;32m OK \x1b[0m ] storage: restored ${restored} entries from IndexedDB\n` : "[ \x1b[1;32m OK \x1b[0m ] storage: IndexedDB mounted (first boot on this device)\n");
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   await publishSysfs();
+  if (typeof sys.readFile(KEYS_CONF) !== "string") { sys.mkdir("/etc/mavex"); sys.writeFile(KEYS_CONF, KEYS_DEFAULT); }
   if (typeof sys.readFile(NET_CONF) !== "string") { sys.mkdir("/etc/mavex"); sys.writeFile(NET_CONF, NET_DEFAULT); }
   for (const [dir, uid] of [["/home/user", 1000], ["/root", 0]]) {
     if (typeof sys.readFile(dir + "/.bashrc") !== "string") {
