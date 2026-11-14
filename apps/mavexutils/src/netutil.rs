@@ -12,9 +12,9 @@ unsafe extern "C" {
 
 struct Reply { status: u32, kind: u32, note: String }
 
-fn call(method: &str, url: &str) -> Reply {
+fn call(method: &str, url: &str, headers: &str) -> Reply {
     unsafe {
-        let id = fetch_open(method.as_ptr(), method.len(), url.as_ptr(), url.len(), std::ptr::null(), 0, std::ptr::null(), 0);
+        let id = fetch_open(method.as_ptr(), method.len(), url.as_ptr(), url.len(), headers.as_ptr(), headers.len(), std::ptr::null(), 0);
         fetch_wait(id);
         let mut info = [0u32; 5];
         fetch_info(id, info.as_mut_ptr());
@@ -27,13 +27,15 @@ fn call(method: &str, url: &str) -> Reply {
 
 pub fn ping(args: &[String]) -> i32 {
     let mut count = 4u32;
+    let mut wait = 5u32;
     let mut target = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-c" => count = it.next().and_then(|v| v.parse().ok()).unwrap_or(4),
+            "-W" => wait = it.next().and_then(|v| v.parse().ok()).unwrap_or(5).max(1),
             "-h" | "--help" => {
-                println!("usage: ping [-c count] host-or-url\nHTTPS reachability probe through the browser (not ICMP): a reply means the host answered,\n\"reachable (no CORS)\" means it answered but the browser hides the response.");
+                println!("usage: ping [-c count] [-W seconds] host-or-url\nHTTPS reachability probe through the browser (not ICMP): a reply means the host answered,\n\"reachable (no CORS)\" means it answered but the browser hides the response.");
                 return 0;
             }
             s if !s.starts_with('-') => target = Some(s.to_string()),
@@ -46,7 +48,7 @@ pub fn ping(args: &[String]) -> i32 {
     let (mut ok, mut times) = (0u32, Vec::new());
     for seq in 1..=count {
         let t0 = Instant::now();
-        let r = call("HEAD", &url);
+        let r = call("HEAD", &url, &format!("x-mavex-timeout: {wait}\n"));
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         match r.kind {
             0 => { ok += 1; times.push(ms); println!("reply from {t}: seq={seq} status={} time={ms:.1} ms", r.status); }
@@ -66,6 +68,6 @@ pub fn ping(args: &[String]) -> i32 {
 
 pub fn backup_restore(name: &str) -> i32 {
     let method = if name == "mavex-restore" { "RESTORE" } else { "BACKUP" };
-    let r = call(method, "mavex:storage");
+    let r = call(method, "mavex:storage", "");
     if r.kind == 0 { println!("{}", r.note); 0 } else { eprintln!("{name}: {}", r.note); 1 }
 }

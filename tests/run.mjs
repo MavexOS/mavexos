@@ -169,7 +169,7 @@ async function runBrush(name, type) {
   await new Promise((r) => setTimeout(r, 800));
   await ty("cat kn.txt; echo; ls /etc/mavex");
   await new Promise((r) => setTimeout(r, 1500));
-  await p.evaluate(() => { globalThis.mavexFetch = async (r) => r.url.endsWith("/nope") ? { kind: 2, note: "mock" } : { kind: 0, status: 200, headers: "content-type: text/plain\ncontent-length: 11\n", body: new TextEncoder().encode("wget-body-ok") }; });
+  await p.evaluate(() => { globalThis.__realFetch = globalThis.mavexFetch; globalThis.mavexFetch = async (r) => r.url.endsWith("/nope") ? { kind: 2, note: "mock" } : { kind: 0, status: 200, headers: "content-type: text/plain\ncontent-length: 11\n", body: new TextEncoder().encode("wget-body-ok") }; });
   await ty("wget -q -O wg.txt http://example.test/f; cat wg.txt; echo; wget -q http://example.test/nope; echo wget-rc-$?");
   await new Promise((r) => setTimeout(r, 4000));
   const doh = await p.evaluate(async () => {
@@ -180,6 +180,14 @@ async function runBrush(name, type) {
     return JSON.stringify([r.kind, r.note, seen]);
   });
   if (doh !== '[0,"dns.google",["cloudflare-dns.com:128","dns.google:128"]]') fails.push("doh failover+padding " + doh);
+  const tmo = await p.evaluate(async () => {
+    const rf = window.fetch, t0 = performance.now();
+    window.fetch = (u, o) => new Promise((_, rej) => o.signal.addEventListener("abort", () => rej(new Error("aborted"))));
+    const r = await globalThis.__realFetch({ method: "HEAD", url: "https://hang.test/", headers: "x-mavex-timeout: 1\n", body: null });
+    window.fetch = rf;
+    return JSON.stringify([r.kind, performance.now() - t0 < 5000]);
+  });
+  if (tmo !== "[1,true]") fails.push("per-request timeout " + tmo);
   await ty("ping -c 2 example.test; test -f ~/.bashrc && echo bashrc-ok; grep -c doh /etc/mavex/network | sed s/^/netconf-/");
   await new Promise((r) => setTimeout(r, 2500));
   await ty("echo p q r | awk '{print $2 NF}'");
@@ -332,7 +340,7 @@ async function runBrush(name, type) {
   if (!/wget-rc-[1-9]/.test(t)) fails.push("wget cors error exit");
   if (!t.includes("\ntarok\n")) fails.push("tar roundtrip + find | xargs");
   if (!t.includes("< hello world") || !t.includes("> hallo world")) fails.push("diff");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.33\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.34\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);

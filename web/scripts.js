@@ -90,6 +90,9 @@ globalThis.mavexFetch = async (req) => {
   if (req.method === "BACKUP") return storageBackup();
   if (req.method === "RESTORE") return storageRestore();
   const pol = netPolicy();
+  // A tool may ask for a shorter timeout than the policy's (ping does); it can never ask for a longer one.
+  const tm = req.headers.match(/^x-mavex-timeout:\s*(\d+)\s*$/im);
+  if (tm) { pol.timeout = Math.min(pol.timeout, Math.max(1, +tm[1])); req = { ...req, headers: req.headers.replace(/^x-mavex-timeout:.*\n?/im, "") }; }
   const direct = () => netAttempt(req.url, req, pol.timeout);
   const viaRelays = async () => {
     if (!/^(GET|HEAD)$/i.test(req.method)) return { kind: 1, note: "relays only support GET and HEAD" };
