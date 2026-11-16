@@ -343,7 +343,7 @@ function fgProgram(line) {
   for (const w of line.trim().split(/\s+/)) { if (/^(sudo|env|exec|command|time)$/.test(w) || w[0] === "-" || /^\w+=/.test(w)) continue; return w.replace(/^.*\//, ""); }
   return "";
 }
-let fgProg = "";
+let fgProg = "", keyLocked = false;
 function keyBytes(c) {
   if (c.ctrl && c.key.length === 1) { const n = c.key.charCodeAt(0); if (n >= 97 && n <= 122) return String.fromCharCode(n - 96); if (c.key === "]") return "\x1d"; if (c.key === "\\") return "\x1c"; }
   const named = Object.keys(RAW_KEYS).find((x) => x.toLowerCase() === c.key);
@@ -356,9 +356,11 @@ async function keyCapture(on) {
 const RAW_KEYS = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D", Home: "\x1b[H", End: "\x1b[F", Delete: "\x1b[3~", PageUp: "\x1b[5~", PageDown: "\x1b[6~", Insert: "\x1b[2~", F1: "\x1bOP", F2: "\x1bOQ", F3: "\x1bOR", F4: "\x1bOS", F5: "\x1b[15~", F6: "\x1b[17~", F7: "\x1b[18~", F8: "\x1b[19~", F9: "\x1b[20~", F10: "\x1b[21~", F11: "\x1b[23~", F12: "\x1b[24~" };
 function rawKey(e) {
   const k = e.key;
+  if (!keyLocked) { keyLocked = true; keyCapture(true); }
   if (e.ctrlKey || e.altKey) {
     const kl = k.toLowerCase();
-    for (const r of keyRemaps(fgProg)) {
+    // ts.rawBy is the program that actually put the tty in raw mode (set by the host); the typed command is a fallback.
+    for (const r of keyRemaps(ts.rawBy || fgProg)) {
       if (r.from.key === kl && r.from.ctrl === e.ctrlKey && r.from.alt === e.altKey && r.from.shift === e.shiftKey) { e.preventDefault(); const b = keyBytes(r.to); if (b) feed(b); return; }
     }
   }
@@ -376,8 +378,7 @@ function rawKey(e) {
 }
 async function runLine(line) {
   running = true; fgProg = fgProgram(line); promptText = ""; renderPrompt(); buf = ""; pos = 0; renderLine(); showLine(true); live = true;
-  keyCapture(true);
-  try { write(await shellRun(line)); } finally { running = false; fgProg = ""; keyCapture(false); R.ttyReset(tt); vt.leave(); vt.resetModes(); }
+  try { write(await shellRun(line)); } finally { running = false; fgProg = ""; if (keyLocked) { keyLocked = false; keyCapture(false); } R.ttyReset(tt); vt.leave(); vt.resetModes(); }
 }
 let pend = null;
 function needMore(text) {

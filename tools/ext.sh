@@ -48,7 +48,7 @@ else
   kdir=.scratch/ext/kernel-src
   if [ ! -d "$kdir" ]; then
     git clone -q https://github.com/MavexOS/mavex-kernel "$kdir"
-    git -C "$kdir" checkout -q debc401b47a6b6c8ff5c2ac3741c1777a6ef0290
+    git -C "$kdir" checkout -q acb3b3aceb4ecb0fc1685008e97aa4f4a95877f3
   fi
 fi
 (cd "$kdir" && cargo build --release --target wasm32-unknown-unknown -p mavex-kernel 2>&1 | tail -1)
