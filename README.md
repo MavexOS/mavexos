@@ -40,9 +40,12 @@ A browser tab cannot open raw sockets. All networking goes through the browser's
     timeout = 30
     relay = https://...     # public CORS relays, tried in order
     doh = https://...       # DNS-over-HTTPS resolvers, tried in order
+    transport = direct      # only "direct" works; "wireguard" is reserved and not implemented
 
 - **Direct** asks the site itself. It only works for sites that allow cross-origin reads.
 - **Relays** are third-party public servers that fetch the page for you. **A relay can read everything you send and receive through it, in plain text.** Do not use relay modes for logins, banking or anything private. They are off by default and often unreliable.
+- **Local resolver**: `mavex-resolved` runs as a service on `127.0.0.1:53` and `/etc/resolv.conf` points at it. `dig name [type] [+short]` queries it. Both are MavexOS's own code. Sockets inside MavexOS are loopback-only: programs here can talk to each other, not to other machines.
+- **Transport** is the place a tunnel would plug in. WireGuard needs UDP, which a tab cannot send, so `transport = wireguard` only fails with a clear message for now.
 - **DoH** answers DNS lookups made inside MavexOS, with padded queries and failover across the listed resolvers. It does not change how the browser itself connects: the browser still uses its own DNS for the actual connection.
 
 `ping` is an HTTPS HEAD request through the browser, not ICMP. `reply` means the site answered and allows reads, `reachable (no CORS)` means it answered but the browser hides the response, and `no reply` means it could not be reached (DNS failure, blocked, offline or a certificate problem; the browser does not say which).
@@ -59,7 +62,7 @@ So `nano` (kibi) quits with **Ctrl+]**. The file is root-owned and read on every
 ## Known limits
 
 - `sudo` asks for no password by default (`/etc/sudoers` has `NOPASSWD`); root has an empty password.
-- `find /` as a normal user stops at the first unreadable directory; use `sudo find`.
+- `find` as a normal user prints a bare `Error: Permission denied (os error 2)` for each directory it cannot read, without naming it, and carries on; use `sudo find` to search everything.
 - `awk -F:` is ignored upstream; use `BEGIN{FS=":"}`. `tar` has no `-C` and does not keep symlinks. `find -exec ... +` is missing.
 - `ls -l` shows `somebody` / `somegroup` instead of user and group names.
 - init: delayed shutdown, `ExecStartPre` and `ExecStop` are not supported.

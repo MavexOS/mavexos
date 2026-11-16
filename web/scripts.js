@@ -55,14 +55,29 @@ relay = https://api.codetabs.com/v1/proxy/?quest={url}
 doh = https://cloudflare-dns.com/dns-query
 doh = https://dns.google/dns-query
 doh = https://dns.quad9.net/dns-query
+# transport: how requests leave the tab. Only "direct" (the browser's own connection) works today.
+# "wireguard" is a reserved name for a future tunnel; choosing it makes every request fail with a clear message.
+transport = direct
 `;
+// Transport seam. A transport takes over all traffic from MavexOS; "direct" means the browser's fetch below.
+// WireGuard needs UDP to its endpoint, which a tab cannot send, so a real one will need a bridge
+// (WebSocket or WebTransport) that does not exist yet. The entry is here so the config name and the
+// place to plug it in are fixed.
+const NET_TRANSPORTS = {
+  direct: null,
+  wireguard: () => ({ kind: 1, note: "the wireguard transport is not implemented yet (a browser tab cannot send UDP). Set transport = direct in /etc/mavex/network" }),
+};
+function netTransport(pol) {
+  if (pol.transport === "direct") return null;
+  return NET_TRANSPORTS[pol.transport] || (() => ({ kind: 1, note: "unknown transport '" + pol.transport + "' in /etc/mavex/network (known: " + Object.keys(NET_TRANSPORTS).join(", ") + ")" }));
+}
 function netPolicy() {
   const txt = typeof sys.readFile(NET_CONF) === "string" ? sys.readFile(NET_CONF) : NET_DEFAULT;
-  const p = { mode: "direct-only", timeout: 30, relays: [], doh: [] };
+  const p = { mode: "direct-only", timeout: 30, relays: [], doh: [], transport: "direct" };
   for (const l of txt.split("\n")) {
-    const m = l.match(/^\s*(mode|timeout|relay|doh)\s*=\s*(\S+)\s*$/);
+    const m = l.match(/^\s*(mode|timeout|relay|doh|transport)\s*=\s*(\S+)\s*$/);
     if (!m) continue;
-    if (m[1] === "relay") p.relays.push(m[2]); else if (m[1] === "doh") p.doh.push(m[2]); else if (m[1] === "timeout") p.timeout = Math.max(1, +m[2] || 30); else p.mode = m[2];
+    if (m[1] === "relay") p.relays.push(m[2]); else if (m[1] === "doh") p.doh.push(m[2]); else if (m[1] === "transport") p.transport = m[2]; else if (m[1] === "timeout") p.timeout = Math.max(1, +m[2] || 30); else p.mode = m[2];
   }
   if (!p.doh.length) p.doh = ["https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query", "https://dns.quad9.net/dns-query"];
   return p;
@@ -97,6 +112,8 @@ globalThis.mavexFetch = async (req) => {
   if (req.method === "BACKUP") return storageBackup();
   if (req.method === "RESTORE") return storageRestore();
   const pol = netPolicy();
+  const via = netTransport(pol);
+  if (via) return via(req);
   // A tool may ask for a shorter timeout than the policy's (ping does); it can never ask for a longer one.
   const tm = req.headers.match(/^x-mavex-timeout:\s*(\d+)\s*$/im);
   if (tm) { pol.timeout = Math.min(pol.timeout, Math.max(1, +tm[1])); req = { ...req, headers: req.headers.replace(/^x-mavex-timeout:.*\n?/im, "") }; }
@@ -138,6 +155,8 @@ function dnsPad(q) {
 }
 globalThis.mavexDns = async (wire) => {
   const pol = netPolicy();
+  const via = netTransport(pol);
+  if (via) return via({ method: "DNS", body: wire });
   const q = dnsPad(wire);
   let last = "no DoH resolvers configured";
   for (const ep of pol.doh) {
