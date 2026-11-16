@@ -124,7 +124,7 @@ async function runBrush(name, type) {
   await p.goto(base + "#fast");
   await p.waitForFunction(() => window.mavexReady, null, { timeout: 8000 });
   const fails = [];
-  for (const l of ["id", "cat /etc/shadow", "sudo id", "ip link add d0 type dummy", "sudo ip link add d0 type dummy", "sudo ip addr add 10.1.2.3/24 dev d0", "sudo ip link set d0 up", "crabfetch --module-override localip", "wg selftest", "sudo mkdir -p /etc/wireguard", "printf '[Interface]\\nPrivateKey = YAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\\nAddress = 10.9.0.2/24\\n[Peer]\\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\\nAllowedIPs = 10.9.0.0/24\\nEndpoint = 192.0.2.1:51820\\n' | sudo tee /etc/wireguard/wg0.conf", "sudo wg-quick up wg0", "wg show", "crabfetch --module-override localip", "ip -br addr", "ip route", "sudo -i", "id -u", "exit", "uname -r", "hostname", "history", "su", "echo a | tr a b"]) await cmd(p, l);
+  for (const l of ["id", "mavex-backup; echo bk-rc-$?", "cat /etc/shadow", "sudo id", "ip link add d0 type dummy", "sudo ip link add d0 type dummy", "sudo ip addr add 10.1.2.3/24 dev d0", "sudo ip link set d0 up", "crabfetch --module-override localip", "wg selftest", "sudo mkdir -p /etc/wireguard", "printf '[Interface]\\nPrivateKey = YAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\\nAddress = 10.9.0.2/24\\n[Peer]\\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\\nAllowedIPs = 10.9.0.0/24\\nEndpoint = 192.0.2.1:51820\\n' | sudo tee /etc/wireguard/wg0.conf", "sudo wg-quick up wg0", "wg show", "crabfetch --module-override localip", "ip -br addr", "ip route", "sudo -i", "id -u", "exit", "uname -r", "hostname", "history", "su", "echo a | tr a b"]) await cmd(p, l);
   await new Promise((r) => setTimeout(r, 500));
   // blocking behaviour (Asyncify): sleep, tty stdin, Ctrl-C, concurrent pipeline
   const ty = async (l) => { await p.keyboard.type(l); await p.keyboard.press("Enter"); };
@@ -340,13 +340,14 @@ async function runBrush(name, type) {
   if (!t.includes("\nkibi-ok")) fails.push("kibi (quit via ctrl+] remap)");
   if (!/\bkeys\b/.test(t)) fails.push("etc/mavex/keys missing");
   if (!t.includes("\nwget-body-ok")) fails.push("wget body");
+  if (!t.includes("only root may back up") || !t.includes("bk-rc-1")) fails.push("mavex-backup must refuse non-root");
   if (!t.includes("reply from example.test: seq=2") || !t.includes("2 sent, 2 answered")) fails.push("ping");
   if (!t.includes("\nbashrc-ok")) fails.push("bashrc");
   if (!/\nnetconf-[1-9]/.test(t)) fails.push("network conf file");
   if (!/wget-rc-[1-9]/.test(t)) fails.push("wget cors error exit");
   if (!t.includes("\ntarok\n")) fails.push("tar roundtrip + find | xargs");
   if (!t.includes("< hello world") || !t.includes("> hallo world")) fails.push("diff");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.35\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.36\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);
