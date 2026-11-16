@@ -11,6 +11,7 @@ mod stty;
 mod sysutils;
 mod top;
 mod wg;
+mod dns;
 mod netutil;
 
 use std::process::exit;
@@ -446,6 +447,8 @@ fn main() {
         "passwd" => auth::passwd(&args),
         "ip" => ip::main(&args),
         "ping" => netutil::ping(&args),
+        "dig" => dns::dig(&args),
+        "mavex-resolved" => dns::resolved(),
         "mavex-backup" | "mavex-restore" => netutil::backup_restore(&name),
         "wg" => wg::wg(&args),
         "wg-quick" => wg::wg_quick(&args),

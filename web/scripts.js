@@ -728,6 +728,8 @@ async function boot() {
   write(restored < 0 ? "\x1b[1;33m[warn]\x1b[0m storage: IndexedDB unavailable, running RAM-only\n" : restored > 0 ? `[ \x1b[1;32m OK \x1b[0m ] storage: restored ${restored} entries from IndexedDB\n` : "[ \x1b[1;32m OK \x1b[0m ] storage: IndexedDB mounted (first boot on this device)\n");
   withStr(await detectGpu(), (p, n) => K.k_set_gpu(p, n));
   await publishSysfs();
+  // DNS inside MavexOS goes to the local resolver (mavex-resolved), which forwards over DNS-over-HTTPS.
+  if (typeof sys.readFile("/etc/resolv.conf") !== "string") sys.writeFile("/etc/resolv.conf", "# MavexOS local resolver (mavex-resolved). Upstream resolvers: the doh = lines in /etc/mavex/network\nnameserver 127.0.0.1\n");
   if (typeof sys.readFile(KEYS_CONF) !== "string") { sys.mkdir("/etc/mavex"); sys.writeFile(KEYS_CONF, KEYS_DEFAULT); }
   if (typeof sys.readFile(NET_CONF) !== "string") { sys.mkdir("/etc/mavex"); sys.writeFile(NET_CONF, NET_DEFAULT); }
   for (const [dir, uid] of [["/home/user", 1000], ["/root", 0]]) {
@@ -738,7 +740,7 @@ async function boot() {
   }
   R.install("coreutils", window.MAVEX_COREUTILS_UTILS);
   R.install("brush", ["sh", "bash"]);
-  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit", "ping", "mavex-backup", "mavex-restore"]);
+  R.install("mavexutils", ["id", "whoami", "groups", "chmod", "chown", "chgrp", "stat", "ip", "uname", "hostname", "clear", "uptime", "free", "nproc", "which", "top", "htop", "wg", "wg-quick", "stty", "tty", "ps", "pgrep", "pkill", "nohup", "realpath", "readlink", "less", "more", "man", "edit", "ping", "dig", "mavex-resolved", "mavex-backup", "mavex-restore"]);
   R.install("rg", []);
   R.install("sed", []);
   R.install("awk", []);

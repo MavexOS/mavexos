@@ -1894,13 +1894,14 @@ version = "0.0.2"
 
 [[package]]
 name = "mavex-utils"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "base64",
  "boringtun",
  "getrandom 0.2.17",
  "regex-lite",
  "sha2",
+ "simple-dns",
 ]
 
 [[package]]
@@ -2660,6 +2661,15 @@ name = "similar"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+
+[[package]]
+name = "simple-dns"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a75cbde1bf934313596a004973e462f9a82caa814dcf1a5f507bdf51597eeb4"
+dependencies = [
+ "bitflags 2.13.2",
+]
 
 [[package]]
 name = "siphasher"

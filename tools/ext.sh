@@ -39,7 +39,7 @@ if [ -n "$MAVEX_INIT_DIR" ]; then
   (cd "$MAVEX_INIT_DIR" && cargo build --release --target wasm32-wasip1 2>&1 | tail -1)
   cp "$MAVEX_INIT_DIR/target/wasm32-wasip1/release/mavex-init.wasm" .scratch/ext/init.wasm
 else
-  build init MavexOS/mavex-init c23710369cc36956ef55cafa6f2629aa85fbf6ae mavex-init
+  build init MavexOS/mavex-init 17e4b93460c16c17c395b366d2e3a178dc9372cf mavex-init
 fi
 # mavex-kernel lives in its own repo; MAVEX_KERNEL_DIR overrides with a local checkout
 if [ -n "$MAVEX_KERNEL_DIR" ]; then
@@ -48,7 +48,7 @@ else
   kdir=.scratch/ext/kernel-src
   if [ ! -d "$kdir" ]; then
     git clone -q https://github.com/MavexOS/mavex-kernel "$kdir"
-    git -C "$kdir" checkout -q acb3b3aceb4ecb0fc1685008e97aa4f4a95877f3
+    git -C "$kdir" checkout -q fdff8f619d538f5f151c3d2f5cec275388f69a0e
   fi
 fi
 (cd "$kdir" && cargo build --release --target wasm32-unknown-unknown -p mavex-kernel 2>&1 | tail -1)

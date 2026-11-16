@@ -172,6 +172,11 @@ async function runBrush(name, type) {
   await p.evaluate(() => { globalThis.__realFetch = globalThis.mavexFetch; globalThis.mavexFetch = async (r) => r.url.endsWith("/nope") ? { kind: 2, note: "mock" } : { kind: 0, status: 200, headers: "content-type: text/plain\ncontent-length: 11\n", body: new TextEncoder().encode("wget-body-ok") }; });
   await ty("wget -q -O wg.txt http://example.test/f; cat wg.txt; echo; wget -q http://example.test/nope; echo wget-rc-$?");
   await new Promise((r) => setTimeout(r, 4000));
+  // dig -> 127.0.0.1:53 (mavex-resolved, started by init) -> the page's DNS layer, mocked here to answer 1.2.3.4
+  await p.evaluate(() => { globalThis.__mfDns = globalThis.mavexFetch; globalThis.mavexFetch = async (r) => { if (r.method !== "DNS") return { kind: 1, note: "x" }; const q = new Uint8Array(r.body), a = new Uint8Array(q.length + 16); a.set(q); a[2] |= 0x80; a[3] |= 0x80; a[7] = 1; a.set([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4], q.length); return { kind: 0, status: 200, headers: "", body: a, note: "mock" }; }; });
+  await ty("dig +short example.test; dig example.test | grep -c 'status: NOERROR' | sed s/^/dig-status-/; dig @9.9.9.9 example.test; cat /etc/resolv.conf | grep -c 127.0.0.1 | sed s/^/resolvconf-/");
+  await new Promise((r) => setTimeout(r, 3500));
+  await p.evaluate(() => { globalThis.mavexFetch = globalThis.__mfDns; });
   const doh = await p.evaluate(async () => {
     const seen = [], rf = window.fetch;
     window.fetch = async (u, o) => { seen.push(new URL(u).host + ":" + o.body.length); return seen.length < 2 ? new Response("x", { status: 503 }) : new Response(new Uint8Array([9, 9]), { status: 200 }); };
@@ -340,6 +345,10 @@ async function runBrush(name, type) {
   if (!t.includes("\nkibi-ok")) fails.push("kibi (quit via ctrl+] remap, started through an alias)");
   if (!/\bkeys\b/.test(t)) fails.push("etc/mavex/keys missing");
   if (!t.includes("\nwget-body-ok")) fails.push("wget body");
+  if (!t.includes("\n1.2.3.4\n")) fails.push("dig +short through mavex-resolved");
+  if (!t.includes("dig-status-1")) fails.push("dig full output");
+  if (!t.includes("cannot query 9.9.9.9")) fails.push("dig must refuse non-local servers plainly");
+  if (!t.includes("resolvconf-1")) fails.push("/etc/resolv.conf");
   if (!t.includes("only root may back up") || !t.includes("bk-rc-1")) fails.push("mavex-backup must refuse non-root");
   if (!t.includes("reply from example.test: seq=2") || !t.includes("2 sent, 2 answered")) fails.push("ping");
   if (!t.includes("\nbashrc-ok")) fails.push("bashrc");
@@ -347,7 +356,7 @@ async function runBrush(name, type) {
   if (!/wget-rc-[1-9]/.test(t)) fails.push("wget cors error exit");
   if (!t.includes("\ntarok\n")) fails.push("tar roundtrip + find | xargs");
   if (!t.includes("< hello world") || !t.includes("> hallo world")) fails.push("diff");
-  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.37\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
+  const need = [["id", "uid=1000(user) gid=1000(user) groups=1000(user),27(sudo)"], ["shadow denied", "cat: /etc/shadow: Permission denied"], ["sudo", "uid=0(root)"], ["crabfetch localip", "Local IP (d0) > 10.1.2.3"], ["wg selftest", "boringtun OK"], ["wg show", "interface: wg0"], ["wg peer", "allowed ips: 10.9.0.0/24"], ["wg localip", "Local IP (wg0) > 10.9.0.2"], ["ip denied", "RTNETLINK answers: Operation not permitted"], ["ip addr", "d0               UNKNOWN"], ["ip route", "10.1.2.0/24 dev d0 proto kernel scope link src 10.1.2.3"], ["sudo -i", "root@mavex:~#"], ["uname", "\n0.0.38\n"], ["hostname", "\nmavex\n"], ["history", "  1  id"], ["su", "root@mavex:/home/user#"], ["pipe", "\nb\n"]];
   for (const [k, v] of need) if (!t.includes(v)) fails.push(k);
   await ty("seq 1 7000"); await w(3000);
   const sb = await p.evaluate(() => document.getElementById("out").textContent.split("\n").length);

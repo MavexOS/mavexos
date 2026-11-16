@@ -25,6 +25,25 @@ fn call(method: &str, url: &str, headers: &str) -> Reply {
     }
 }
 
+/// One DNS exchange over the page's DNS-over-HTTPS layer: wire message in, wire message out.
+pub fn dns_exchange(wire: &[u8]) -> Result<(Vec<u8>, String), String> {
+    unsafe {
+        let (m, u) = ("DNS", "mavex:dns");
+        let id = fetch_open(m.as_ptr(), m.len(), u.as_ptr(), u.len(), std::ptr::null(), 0, wire.as_ptr(), wire.len());
+        fetch_wait(id);
+        let mut info = [0u32; 5];
+        fetch_info(id, info.as_mut_ptr());
+        let mut body = vec![0u8; info[2] as usize];
+        let n = fetch_read(id, 0, 0, body.as_mut_ptr(), body.len()).max(0) as usize;
+        body.truncate(n);
+        let mut note = vec![0u8; info[4] as usize];
+        let k = fetch_read(id, 2, 0, note.as_mut_ptr(), note.len()).max(0) as usize;
+        fetch_close(id);
+        let note = String::from_utf8_lossy(&note[..k]).into_owned();
+        if info[1] == 0 { Ok((body, note)) } else { Err(note) }
+    }
+}
+
 pub fn ping(args: &[String]) -> i32 {
     let mut count = 4u32;
     let mut wait = 5u32;
