@@ -28,14 +28,16 @@ fn call(method: &str, url: &str, headers: &str) -> Reply {
 pub fn ping(args: &[String]) -> i32 {
     let mut count = 4u32;
     let mut wait = 5u32;
+    let mut interval = 1.0f64;
     let mut target = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-c" => count = it.next().and_then(|v| v.parse().ok()).unwrap_or(4),
+            "-i" => interval = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f64).max(0.0),
             "-W" => wait = it.next().and_then(|v| v.parse().ok()).unwrap_or(5).max(1),
             "-h" | "--help" => {
-                println!("usage: ping [-c count] [-W seconds] host-or-url\nHTTPS reachability probe through the browser (not ICMP): a reply means the host answered,\n\"reachable (no CORS)\" means it answered but the browser hides the response.");
+                println!("usage: ping [-c count] [-i interval] [-W timeout] host-or-url\nHTTPS reachability probe through the browser (not ICMP): a reply means the host answered,\n\"reachable (no CORS)\" means it answered but the browser hides the response.");
                 return 0;
             }
             s if !s.starts_with('-') => target = Some(s.to_string()),
@@ -47,6 +49,7 @@ pub fn ping(args: &[String]) -> i32 {
     println!("PING {url} (HTTPS HEAD through the browser, not ICMP)");
     let (mut ok, mut times) = (0u32, Vec::new());
     for seq in 1..=count {
+        if seq > 1 && interval > 0.0 { std::thread::sleep(std::time::Duration::from_secs_f64(interval)); }
         let t0 = Instant::now();
         let r = call("HEAD", &url, &format!("x-mavex-timeout: {wait}\n"));
         let ms = t0.elapsed().as_secs_f64() * 1000.0;

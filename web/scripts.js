@@ -69,6 +69,8 @@ function netPolicy() {
 }
 async function netAttempt(url, req, secs) {
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), secs * 1000);
+  const gone = req.signal; // set by the host: fires when the calling process is killed or exits
+  if (gone) { if (gone.aborted) ctl.abort(); else gone.addEventListener("abort", () => ctl.abort(), { once: true }); }
   const headers = new Headers();
   for (const l of req.headers.split("\n")) { const i = l.indexOf(":"); if (i > 0) try { headers.set(l.slice(0, i).trim(), l.slice(i + 1).trim()); } catch (_) {} }
   try {
@@ -79,11 +81,16 @@ async function netAttempt(url, req, secs) {
     if (req.method !== "HEAD") hd += "content-length: " + body.length + "\n";
     return { kind: 0, status: r.status, headers: hd, body, note: r.url && r.url !== url ? "final url: " + r.url : "" };
   } catch (e) {
+    if (gone && gone.aborted) return { kind: 1, note: "cancelled" };
     if (ctl.signal.aborted) return { kind: 1, note: "timed out after " + secs + "s" };
     // The browser hides why fetch failed; an opaque no-cors probe tells "reachable but no CORS headers" from "unreachable".
-    try { await fetch(url, { mode: "no-cors", method: "GET", signal: AbortSignal.timeout(secs * 1000), credentials: "omit" }); return { kind: 2, note: "blocked by CORS: the server answered but does not allow cross-origin reads" }; }
+    // HEAD stays HEAD so a reachability check does not download the page.
+    const pc = new AbortController(), pt = setTimeout(() => pc.abort(), secs * 1000);
+    if (gone) gone.addEventListener("abort", () => pc.abort(), { once: true });
+    try { await fetch(url, { mode: "no-cors", method: req.method === "HEAD" ? "HEAD" : "GET", signal: pc.signal, credentials: "omit", cache: "no-store" }); return { kind: 2, note: "blocked by CORS: the server answered but does not allow cross-origin reads" }; }
     catch (_) { return { kind: 1, note: "could not reach the server (DNS failure, blocked, offline, or an https certificate problem)" }; }
-  }
+    finally { clearTimeout(pt); }
+  } finally { clearTimeout(t); }
 }
 globalThis.mavexFetch = async (req) => {
   if (req.method === "DNS") return globalThis.mavexDns(req.body);
